@@ -39,7 +39,10 @@ assert 'CheckTokenMembership' in mini
 assert 'bool RestoreExplorerWindow(HWND owner)' in mini
 assert 'g_ui.executableDirectory=ExecutableDirectory();' in mini
 assert 'ShellExecuteExW(&launch)' in mini
-assert 'const std::wstring parameters = L"/n,' in mini
+assert 'const std::wstring parameters = ExplorerArguments(directory);' in mini
+assert 'std::wstring ExplorerArguments(std::wstring directory)' in mini
+assert 'ExplorerArguments(L"E:' in mini
+assert 'ExplorerArguments(L"E:' in mini and 'return L"/n," + directory' in mini
 assert 'GetWindowsDirectoryW(windowsDirectory, MAX_PATH)' in mini
 assert 'launch.lpFile = explorer.c_str()' in mini
 assert 'launch.lpParameters = parameters.c_str()' in mini
