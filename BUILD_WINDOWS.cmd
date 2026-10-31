@@ -11,6 +11,6 @@ cmake --build build --config Release --parallel || exit /b 1
 ctest --test-dir build -C Release --output-on-failure || exit /b 1
 if not exist dist mkdir dist
 copy /y "build\Release\USBGuardUI.exe" "dist\USBGuardUI.exe" >nul || exit /b 1
-copy /y "build\Release\USBGuardToast.exe" "dist\USBGuardToast.exe" >nul || exit /b 1
-echo Built and tested. See dist\USBGuardUI.exe and dist\USBGuardToast.exe
+copy /y "build\Release\USBGuardMini.exe" "dist\USBGuardMini.exe" >nul || exit /b 1
+echo Built and tested. See dist\USBGuardUI.exe and dist\USBGuardMini.exe
 exit /b 0
