@@ -427,38 +427,37 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     const DWORD build = WindowsBuild();
     NativeToast toast;
     bool modern = toast.Setup(build);
+    // Send both native Toast and Shell notification-area messages. On systems
+    // where temporary desktop Toast identity registration is not yet visible
+    // to the notification service, the Shell notification is the fallback.
     Balloon balloon;
-    if (!modern) balloon.Start();
+    balloon.Start();
     // Publish the consent instruction before Windows displays its own UAC dialog.
     // The notification is informational: UAC is the only confirmation required.
     const std::wstring consent = L"请在 Windows 用户账户控制对话框中点击“是”，允许修改 U 盘写保护设置。";
-    if (modern) {
-        if (!toast.Show(L"USB Guard 需要管理员权限", consent, false)) {
-            modern = false;
-            balloon.Start();
-        }
-    }
-    if (!modern) balloon.Tell(L"USB Guard 需要管理员权限", consent);
+    if (modern && !toast.Show(L"USB Guard 需要管理员权限", consent, false))
+        modern = false;
+    balloon.Tell(L"USB Guard 需要管理员权限", consent);
     bool progressStarted = false;
     // ShellExecuteExW runs immediately from LaunchWorker, without a waiting period.
     auto result = LaunchWorker(action, [&](size_t done, size_t total, const std::wstring& stage) {
         if (modern) {
-            if (!progressStarted) {
+            if (!progressStarted)
                 progressStarted = toast.Show(L"USB Guard 正在处理", stage, true);
-            }
-            if (progressStarted) toast.Update(done, total, stage);
-        } else if (total) {
+            if (progressStarted && !toast.Update(done, total, stage))
+                progressStarted = false;
+        }
+        if (total) {
             const unsigned pct = static_cast<unsigned>(100 * done / total);
             balloon.Tell(L"USB Guard 正在处理", std::to_wstring(pct) + L"% · " + stage);
         }
     });
     const bool success = result.exitCode == 0;
     const std::wstring title = success ? L"USB Guard 操作完成" : L"USB Guard 操作失败";
-    if (modern) {
-        if (!toast.Show(title, result.message, false)) {
-            balloon.Start(); balloon.Tell(title, result.message, !success);
-        }
-    } else balloon.Tell(title, result.message, !success);
+    if (modern) toast.Show(title, result.message, false);
+    // The completion event is sent to the Shell separately, even if the WinRT
+    // API reported success: Show() does not guarantee visible presentation.
+    balloon.Tell(title, result.message, !success);
     usb::WriteConsoleLine(result.message);
     return result.exitCode;
 }
