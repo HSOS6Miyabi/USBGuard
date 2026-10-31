@@ -165,7 +165,11 @@ struct NativeToast {
         ComPtr<N::IToastNotificationManagerStatics2> manager2;
         if (SUCCEEDED(manager.As(&manager2)) && manager2)
             manager2->get_History(&history);
-        if (history) history->ClearWithId(appId.raw);
+        if (history) {
+            history->ClearWithId(appId.raw);
+            HStr tag(runtime, NOTIFICATION_TAG);
+            history->Remove(tag.raw); // Also handles unpackaged desktop-app history.
+        }
         available = true;
         return true;
     }
@@ -247,8 +251,8 @@ struct NativeToast {
         if (!available) return false;
         // Remove the progress item; do not leave a stale progress card in history.
         if (history) {
-            HStr appId(runtime, identity.appId), tag(runtime, NOTIFICATION_TAG);
-            history->RemoveGroupedTagWithId(tag.raw, nullptr, appId.raw);
+            HStr tag(runtime, NOTIFICATION_TAG);
+            history->Remove(tag.raw);
         }
         progressStarted = false;
         // Same tag and app identity: a single completion entry remains in history.
