@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     if len(sys.argv) > 1:
         built_icon = Path(sys.argv[1]).read_bytes()
         assert built_icon == ico, 'The embedded icon input differs from the icon generator output'
-assert b'\\x89PNG\\r\\n\\x1a\\n' in ico
+assert b'\x89PNG\r\n\x1a\n' in ico
 reserved, kind, count = struct.unpack_from('<HHH', ico, 0)
 assert reserved == 0 and kind == 1 and count >= 4
 sizes = set()
