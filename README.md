@@ -5,7 +5,7 @@
 | 程序 | 使用方式 | 运行期间的界面 | 权限 |
 |---|---|---|---|
 | `USBGuardUI.exe` | 双击进入完整管理界面 | 磁盘列表、卷复选框、操作按钮、进度条、结果提示 | EXE 清单要求管理员权限 |
-| `USBGuardToast.exe` | 双击直接切换程序所在 U 盘的只读状态 | Windows Toast 进度/结果通知；旧版系统采用兼容提示 | 普通进程发送通知，短暂管理员进程执行磁盘操作 |
+| `USBGuardToast.exe` | 双击直接切换程序所在 U 盘的只读状态 | 系统通知区域提示，进度以百分比文字显示 | 普通进程发送通知，短暂管理员进程执行磁盘操作 |
 
 两个版本都支持 `--protect`、`--unprotect`、`--toggle`、`--status`。通知版没有参数时执行 `--toggle`；界面版没有参数时打开图形界面。命令行模式仅操作 **当前 EXE 所在 USB 物理磁盘**，不会自动选择其他磁盘。
 
@@ -25,14 +25,14 @@
 
 通知版采用同一 EXE 的短暂双进程架构：
 
-1. 普通权限进程负责系统通知并创建临时命名管道，不显示应用主窗口。
+1. 普通权限进程创建会话内临时通知图标及命名管道，不显示应用主窗口。
 2. 通过系统 `runas` 请求 UAC 管理员权限，启动同一 EXE 的工作进程；工作进程仅负责磁盘操作和进度报告。
-3. 普通进程按系统能力发布正在处理通知，并在 Windows 10 1703 及更新版本更新 Toast 进度条；Windows 8/8.1 使用普通 Toast 结果通知。
-4. 工作进程检查持久属性并退出，普通进程发布最终通知后也立即退出。没有常驻服务、托盘进程、定时器或留在 U 盘上的辅助程序。
+3. 普通进程通过 `Shell_NotifyIconW` 发布进度百分比及操作结果。Windows 10/11 可将通知区域提示显示为系统横幅；较旧 Windows 显示传统气球提示。无需开始菜单快捷方式、AppUserModelID 或应用通知注册。
+4. 工作进程检查持久属性并退出，普通进程发布最终通知并删除临时通知图标后立即退出。不会留下常驻进程、托盘图标或留在 U 盘上的辅助程序。
 
-Windows 7 使用通知区域气球提示。由于系统要求通知区域图标与进程同时存在，退出进程会使气球通知可能提前消失。程序优先确保及时退出、释放 EXE 文件占用。通知是否实际弹出仍受 Windows 通知设置、专注模式和用户会话影响。
+Windows 7/8 的气球通知依赖运行中的通知图标；进程退出后可能提前消失。Windows 10/11 的横幅显示与通知中心留存由系统控制。程序优先立即退出，以释放 EXE 文件占用；通知显示仍取决于系统设置。
 
-普通权限进程在当前用户的开始菜单中创建或更新 `Portable USB Guard.lnk`，以提供桌面 Toast 必需的 `AppUserModelID`。此快捷方式只供通知识别使用，**不保存任何磁盘读写策略**，拔出 U 盘后可以手动删除。完整界面不需要此快捷方式。
+**便携性：** 程序不会主动在运行计算机上创建或修改开始菜单快捷方式、注册表持久项、安装文件、日志、配置文件或通知激活程序。通信管道和通知图标仅在进程运行期间存在。Windows 可能自行记录程序运行、UAC 操作和通知历史；操作系统自身的这些记录不受程序控制。原生交互式 Toast 进度条需要额外应用身份机制，本模式因此使用通知文本报告进度。
 
 ## 操作
 
@@ -69,7 +69,7 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-也可以双击 `BUILD_WINDOWS.cmd`，脚本会进行 Release 构建、运行测试，并将两个 EXE 复制到 `dist` 目录。产物分别是 `build\Release\USBGuardUI.exe` 和 `build\Release\USBGuardToast.exe`。清单和多尺寸 EXE 图标已嵌入两个程序，可以分别独立拷贝到 U 盘。`USBGuardToast.exe` 使用动态加载 Windows Runtime 入口，因此 Windows 7 即使没有这些入口也可以进入兼容通知流程。
+也可以双击 `BUILD_WINDOWS.cmd`，脚本会进行 Release 构建、运行测试，并将两个 EXE 复制到 `dist` 目录。产物分别是 `build\Release\USBGuardUI.exe` 和 `build\Release\USBGuardToast.exe`。清单和多尺寸 EXE 图标已嵌入两个程序，可以分别独立拷贝到 U 盘。`USBGuardToast.exe` 使用 `Shell_NotifyIconW`，兼容 Windows 7/8/10/11，无需 Windows App SDK。
 
 Windows 7/8 应在真实设备上测试。通知 API 兼容性并不意味着该操作系统已经获得所有安全更新。
 
@@ -77,12 +77,11 @@ Windows 7/8 应在真实设备上测试。通知 API 兼容性并不意味着该
 
 项目附带无磁盘写入的策略单元测试。`ctest` 可以在 Linux 上测试跨平台策略逻辑，但 Win32 程序必须在 Windows 环境中编译和运行，GitHub Actions 在 Windows 上分别构建 x86、x64、ARM64 两种应用程序，并验证 PE 格式、目标架构、资源文件和独立策略逻辑。x86/x64 执行策略测试；ARM64 由 x64 Windows 运行器交叉编译，执行源码检查及 PE 静态验证。每次 `main` 分支提交通过所有检查后，会创建带 SHA-256 校验值的 GitHub Release；`v*` 标签也会触发发布。
 
-用于验证的测试 U 盘应有完整的数据备份。测试包括 MBR/GPT、含多个分区的 U 盘、NTFS/FAT32/exFAT、Windows 不识别的分区、管理员权限取消、U 盘重新插入、Windows 7 与 Windows 10/11 的通知，以及通知版操作后能否立即弹出设备。
+用于验证的测试 U 盘应有完整的数据备份。测试包括 MBR/GPT、含多个分区的 U 盘、NTFS/FAT32/exFAT、Windows 不识别的分区、管理员权限取消、U 盘重新插入、Windows 7/8/10/11 的通知，以及通知版操作后能否立即弹出设备。
 
 ## Microsoft API 文档
 
 - https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/attributes-volume
 - https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-ioctl_volume_get_gpt_attributes
-- https://learn.microsoft.com/en-us/windows/win32/shell/enable-desktop-toast-with-appusermodelid
 - https://learn.microsoft.com/en-us/windows/win32/shell/notification-area
-- https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotifier.update
+- https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shell_notifyiconw
