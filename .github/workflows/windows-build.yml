@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: usbguard-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -29,6 +29,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Windows XP platform toolset (x86 only)
         if: matrix.name == 'x86'
+        timeout-minutes: 12
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -43,7 +44,14 @@ jobs:
             $arguments = 'modify --installPath "' + $installPath +
               '" --add Microsoft.VisualStudio.Component.VC.v141.x86.x64' +
               ' --add Microsoft.VisualStudio.Component.WinXP --quiet --norestart'
-            $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+            $process = Start-Process -FilePath $installer -ArgumentList $arguments -PassThru
+            try {
+              Wait-Process -Id $process.Id -Timeout 630 -ErrorAction Stop
+            } catch {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              throw "Windows XP toolset installation exceeded the CI time limit"
+            }
+            $process.Refresh()
             if ($process.ExitCode -notin @(0,3010)) {
               throw "Windows XP toolset installation failed (exit code $($process.ExitCode))"
             }
