@@ -17,9 +17,9 @@ if(WIN32)
     endif()
 
     file(WRITE "${ICON_OUTPUT_DIR}/ui.generated.rc"
-        "#include <winuser.h>\\n101 ICON \\"${ICON_OUTPUT_DIR}/usb-guard.ico\\"\\n1 RT_MANIFEST \\"${CMAKE_CURRENT_SOURCE_DIR}/app.manifest\\"\\n")
+        "#include <winuser.h>\n101 ICON \"${ICON_OUTPUT_DIR}/usb-guard.ico\"\n1 RT_MANIFEST \"${CMAKE_CURRENT_SOURCE_DIR}/app.manifest\"\n")
     file(WRITE "${ICON_OUTPUT_DIR}/toast.generated.rc"
-        "#include <winuser.h>\\n101 ICON \\"${ICON_OUTPUT_DIR}/usb-guard.ico\\"\\n1 RT_MANIFEST \\"${CMAKE_CURRENT_SOURCE_DIR}/toast.manifest\\"\\n")
+        "#include <winuser.h>\n101 ICON \"${ICON_OUTPUT_DIR}/usb-guard.ico\"\n1 RT_MANIFEST \"${CMAKE_CURRENT_SOURCE_DIR}/toast.manifest\"\n")
 
 set(COMMON_SOURCES engine.cpp engine.hpp command.cpp command.hpp policy.hpp)
 add_executable(USBGuardUI WIN32 ui_main.cpp ${COMMON_SOURCES} "${ICON_OUTPUT_DIR}/ui.generated.rc")
