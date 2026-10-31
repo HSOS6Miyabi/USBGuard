@@ -36,7 +36,7 @@ extern DWORD g_executableDisk;
 extern std::set<DWORD> g_windowsDisks;
 std::wstring ErrorText(DWORD error);
 // Persistent metadata and mounted filesystem state must be evaluated independently.
-// RefreshMountedState never force-dismounts a busy volume.
+// RefreshMountedState dismounts targeted volumes, including busy ones, and verifies remount.
 bool ReadAttributes(HANDLE handle, ULONGLONG& attributes, std::wstring& error);
 bool WriteAttributes(const std::wstring& device, ULONGLONG attributes,
                      bool allVolumes, std::wstring& error);
