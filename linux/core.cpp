@@ -1,7 +1,7 @@
 #include "core.hpp"
+#include <sys/mount.h>
 #include <linux/fs.h>
 #include <sys/ioctl.h>
-#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/sysmacros.h>
@@ -44,9 +44,6 @@ std::string Canonical(const std::string& path) {
     free(resolved);
     return result;
 }
-bool HasComponent(const std::string& path, const std::string& component) {
-    return path.find("/" + component + "/") != std::string::npos;
-}
 bool IsUsbPath(const std::string& path) {
     // USB ancestry is visible in sysfs regardless of udev or desktop services.
     const auto offset = path.find("/usb");
@@ -65,9 +62,6 @@ std::string DiskFromBlockName(const std::string& name) {
     if (!fs::exists(partition)) return name;
     const std::string parent = item.parent_path().filename().string();
     return fs::exists("/sys/class/block/" + parent) ? parent : "";
-}
-bool Contains(const std::vector<std::string>& allowed, const std::string& value) {
-    return std::find(allowed.begin(), allowed.end(), value) != allowed.end();
 }
 void Report(const Progress& progress, int done, int total, const std::string& text) {
     if (progress) progress(done, total, text);
