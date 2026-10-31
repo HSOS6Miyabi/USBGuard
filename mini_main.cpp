@@ -65,9 +65,11 @@ bool VerifyNamedPipePeer(HANDLE pipe, HANDLE worker) {
         return getProcessId && getClientPid(pipe, &clientPid) &&
                clientPid == getProcessId(worker);
     }
-    // XP has no GetNamedPipeClientProcessId. The pipe name includes a unique
-    // 128-bit GUID, and it is generated immediately before starting the worker.
-    return WaitForSingleObject(worker, 0) == WAIT_TIMEOUT;
+    // Windows XP cannot query the peer PID. The pipe is a single-client
+    // endpoint with a cryptographically unpredictable GUID known only to the
+    // launched worker. Do not require the worker to still be running here:
+    // it may complete before the UI observes the connection.
+    return worker != nullptr && worker != INVALID_HANDLE_VALUE;
 }
 
 void CancelPipeOperation(HANDLE pipe, OVERLAPPED* pending) {
