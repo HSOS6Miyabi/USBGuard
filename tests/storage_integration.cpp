@@ -1,6 +1,7 @@
 #include "engine.hpp"
 #include <windows.h>
 #include <cwchar>
+#include <cstring>
 #include <iostream>
 #include <string>
 
@@ -52,6 +53,25 @@ int wmain(int argc, wchar_t** argv) {
     const PARTITION_STYLE style = _wcsicmp(argv[3], L"GPT") == 0
         ? PARTITION_STYLE_GPT : PARTITION_STYLE_MBR;
 
+    // Never run this destructive test against a real USB or system disk.
+    const std::wstring physical = L"\\\\.\\PhysicalDrive" + std::to_wstring(number);
+    HANDLE diskHandle = CreateFileW(physical.c_str(), GENERIC_READ,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    nullptr, OPEN_EXISTING, 0, nullptr);
+    STORAGE_PROPERTY_QUERY query{};
+    query.PropertyId = StorageDeviceProperty;
+    query.QueryType = PropertyStandardQuery;
+    STORAGE_DEVICE_DESCRIPTOR descriptor{};
+    DWORD returned = 0;
+    const bool disposable = diskHandle != INVALID_HANDLE_VALUE &&
+        DeviceIoControl(diskHandle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query),
+                        &descriptor, sizeof(descriptor), &returned, nullptr) &&
+        (descriptor.BusType == BusTypeFileBackedVirtual || descriptor.BusType == BusTypeVirtual);
+    if (diskHandle != INVALID_HANDLE_VALUE) CloseHandle(diskHandle);
+    if (!disposable) {
+        std::wcerr << L"Refusing to modify a nonvirtual disk\\n";
+        return 9;
+    }
     std::wstring problem;
     if (!usb::Discover(problem)) {
         Trace(L"Discovery failed", problem);
