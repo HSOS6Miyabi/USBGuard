@@ -38,7 +38,16 @@ assert 'GetProcAddress(user32, "SetProcessDpiAwarenessContext")' in mini
 assert 'CheckTokenMembership' in mini
 assert 'bool RestoreExplorerWindow(HWND owner)' in mini
 assert 'g_ui.executableDirectory=ExecutableDirectory();' in mini
-assert 'ShellExecuteW(owner, L"open", directory.c_str()' in mini
+assert 'ShellExecuteExW(&launch)' in mini
+assert 'const std::wstring parameters = L"/n,' in mini
+assert 'GetWindowsDirectoryW(windowsDirectory, MAX_PATH)' in mini
+assert 'launch.lpFile = explorer.c_str()' in mini
+assert 'launch.lpParameters = parameters.c_str()' in mini
+assert 'launch.nShow = SW_SHOWNORMAL' in mini
+assert 'TryRestoreExplorerWindow(window)' in mini
+assert 'g_ui.restoreExplorerPending' in mini
+assert 'g_ui.lastExplorerAttempt < 400' in mini
+assert 'elapsed < 3200' in mini
 assert 'g_ui.requestedAction != policy::Action::Status' in mini
 assert 'g_ui.succeeded && !g_ui.smokeTest' in mini
 assert 'HasDriveLetterMount' in engine and 'IsEligiblePartition' in engine
