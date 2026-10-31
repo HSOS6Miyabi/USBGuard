@@ -130,7 +130,14 @@ bool DiskProperties(DWORD number, PARTITION_STYLE& style, ULONGLONG& size) {
                          &query, sizeof(query), response, sizeof(response), &returned, nullptr) ||
         returned < offsetof(STORAGE_DEVICE_DESCRIPTOR, RawDeviceProperties)) return false;
     auto* descriptor = reinterpret_cast<STORAGE_DEVICE_DESCRIPTOR*>(response);
+#ifdef USBGUARD_VIRTUAL_DISK_TEST
+    // Only the CI-only executable is permitted to exercise disposable virtual disks.
+    if (descriptor->BusType != BusTypeUsb &&
+        descriptor->BusType != BusTypeFileBackedVirtual &&
+        descriptor->BusType != BusTypeVirtual) return false;
+#else
     if (descriptor->BusType != BusTypeUsb) return false;
+#endif
 
     std::vector<BYTE> layoutBuffer(65536);
     if (!DeviceIoControl(handle.get(), IOCTL_DISK_GET_DRIVE_LAYOUT_EX, nullptr, 0,
