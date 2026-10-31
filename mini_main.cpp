@@ -25,16 +25,44 @@ struct Packet {
 void CopyPacketText(Packet& p, const std::wstring& text) {
     wcsncpy_s(p.text, text.c_str(), _TRUNCATE);
 }
+// CheckTokenMembership is available on XP and distinguishes an elevated
+// administrator token from a filtered token on newer Windows.
 bool Elevated() {
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
-    TOKEN_ELEVATION elevation{};
-    DWORD bytes = 0;
-    const bool ok = GetTokenInformation(token, TokenElevation, &elevation,
-                                        sizeof(elevation), &bytes) != FALSE;
-    CloseHandle(token);
-    return ok && elevation.TokenIsElevated != 0;
+    SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    PSID adminSid = nullptr;
+    if (!AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                                  DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0,
+                                  &adminSid)) return false;
+    BOOL member = FALSE;
+    const BOOL ok = CheckTokenMembership(nullptr, adminSid, &member);
+    FreeSid(adminSid);
+    return ok && member;
 }
+
+bool VerifyNamedPipePeer(HANDLE pipe, HANDLE worker) {
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    using ClientPidFn = BOOL (WINAPI*)(HANDLE, PULONG);
+    auto getClientPid = kernel ? reinterpret_cast<ClientPidFn>(
+        GetProcAddress(kernel, "GetNamedPipeClientProcessId")) : nullptr;
+    if (getClientPid) {
+        ULONG clientPid = 0;
+        return getClientPid(pipe, &clientPid) &&
+               clientPid == GetProcessId(worker);
+    }
+    // XP has no GetNamedPipeClientProcessId. The pipe name includes a unique
+    // 128-bit GUID, and it is generated immediately before starting the worker.
+    return WaitForSingleObject(worker, 0) == WAIT_TIMEOUT;
+}
+
+void CancelPipeOperation(HANDLE pipe, OVERLAPPED* pending) {
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    using CancelFn = BOOL (WINAPI*)(HANDLE, LPOVERLAPPED);
+    auto cancelEx = kernel ? reinterpret_cast<CancelFn>(
+        GetProcAddress(kernel, "CancelIoEx")) : nullptr;
+    if (cancelEx) cancelEx(pipe, pending);
+    else CancelIo(pipe);
+}
+
 int Worker(policy::Action action, const std::wstring& pipeName) {
     if (!Elevated() || action == policy::Action::Invalid ||
         pipeName.rfind(L"\\\\.\\pipe\\USBGuard-", 0) != 0) return 4;
@@ -81,7 +109,7 @@ usb::CommandResult LaunchWorker(policy::Action action, const usb::Progress& repo
     SHELLEXECUTEINFOW launch{};
     launch.cbSize = sizeof(launch);
     launch.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
-    launch.lpVerb = L"runas";
+    launch.lpVerb = Elevated() ? L"open" : L"runas";
     launch.lpFile = executable;
     launch.lpParameters = arguments.c_str();
     launch.nShow = SW_HIDE;
@@ -108,9 +136,7 @@ usb::CommandResult LaunchWorker(policy::Action action, const usb::Progress& repo
     }
     usb::CommandResult result{4, L"无法接收磁盘操作进度。"};
     if (connected) {
-        DWORD clientPid = 0;
-        if (GetNamedPipeClientProcessId(pipe, &clientPid) &&
-            clientPid == GetProcessId(launch.hProcess)) {
+        if (VerifyNamedPipePeer(pipe, launch.hProcess)) {
             OVERLAPPED reading{};
             reading.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
             if (reading.hEvent) {
@@ -140,7 +166,7 @@ usb::CommandResult LaunchWorker(policy::Action action, const usb::Progress& repo
     }
     // Always close the handle before returning; the notification process then exits immediately.
     if (pending.hEvent) {
-        if (!connected) CancelIoEx(pipe, &pending);
+        if (!connected) CancelPipeOperation(pipe, &pending);
         CloseHandle(pending.hEvent);
     }
     CloseHandle(pipe);
@@ -158,6 +184,16 @@ usb::CommandResult LaunchWorker(policy::Action action, const usb::Progress& repo
 // Everything below runs in the unelevated UI process. No notification service,
 // registry writes, installed components or persistent system settings are used.
 namespace {
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+ULONGLONG CompatTickCount() {
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    using TickFn = ULONGLONG (WINAPI*)();
+    auto tick64 = kernel ? reinterpret_cast<TickFn>(
+        GetProcAddress(kernel, "GetTickCount64")) : nullptr;
+    return tick64 ? tick64() : static_cast<ULONGLONG>(GetTickCount());
+}
 constexpr UINT kProgressMessage = WM_APP + 201;
 constexpr UINT kFinishedMessage = WM_APP + 202;
 constexpr UINT_PTR kAnimationTimer = 1;
@@ -297,7 +333,7 @@ void DrawMiniWindow(HDC dc) {
     std::wstring footer;
     if (!g_ui.finished) footer = L"请等待操作结束，期间不要拔出 U 盘";
     else {
-        ULONGLONG elapsed = GetTickCount64() - g_ui.finishTick;
+        ULONGLONG elapsed = CompatTickCount() - g_ui.finishTick;
         unsigned seconds = elapsed < kFinishDurationMs
             ? static_cast<unsigned>((kFinishDurationMs - elapsed + 999) / 1000) : 0;
         footer = std::to_wstring(seconds) + L" 秒后自动关闭";
@@ -388,7 +424,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g_ui.succeeded=result->exitCode == 0;
         g_ui.heading=g_ui.succeeded ? L"操作已完成" : L"操作未完成";
         g_ui.details=std::move(result->text);
-        g_ui.finishTick=GetTickCount64();
+        g_ui.finishTick=CompatTickCount();
         KillTimer(window,kAnimationTimer);
         SetTimer(window,kCloseTimer,100,nullptr);
         SetWindowPos(window,HWND_TOPMOST,0,0,0,0,
@@ -402,7 +438,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 g_ui.animation+=static_cast<unsigned>(Scale(8));
             InvalidateRect(window,nullptr,FALSE);
         } else if (wParam == kCloseTimer) {
-            if (GetTickCount64()-g_ui.finishTick >=
+            if (CompatTickCount()-g_ui.finishTick >=
                 (g_ui.smokeTest ? 500u : kFinishDurationMs)) {
                 KillTimer(window,kCloseTimer);
                 DestroyWindow(window);
@@ -433,11 +469,18 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 }
 
 int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest) {
-    using DpiContextFn = BOOL(WINAPI*)(DPI_AWARENESS_CONTEXT);
-    auto dpiFn=reinterpret_cast<DpiContextFn>(
-        GetProcAddress(GetModuleHandleW(L"user32.dll"),"SetProcessDpiAwarenessContext"));
-    if (!dpiFn || !dpiFn(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
-        SetProcessDPIAware();
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    using DpiContextFn = BOOL (WINAPI*)(HANDLE);
+    auto dpiFn = user32 ? reinterpret_cast<DpiContextFn>(
+        GetProcAddress(user32, "SetProcessDpiAwarenessContext")) : nullptr;
+    const HANDLE perMonitorV2 = reinterpret_cast<HANDLE>(
+        static_cast<INT_PTR>(-4));
+    if (!dpiFn || !dpiFn(perMonitorV2)) {
+        using DpiAwareFn = BOOL (WINAPI*)();
+        auto dpiAware = user32 ? reinterpret_cast<DpiAwareFn>(
+            GetProcAddress(user32, "SetProcessDPIAware")) : nullptr;
+        if (dpiAware) dpiAware();
+    }
 
     HDC screen=GetDC(nullptr);
     if (screen) {
