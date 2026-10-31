@@ -235,57 +235,57 @@ bool ReadMountedReadOnly(const std::wstring& volume, bool& readonly) {
 
 bool RefreshMountedState(DWORD diskNumber, const std::vector<std::wstring>& volumeDevices,
                          bool desiredReadOnly, std::wstring& detail) {
-    // This updates the disk partition cache, not necessarily the mounted file
-    // system. Only a verified exclusive volume lock permits a safe remount.
+    // Refresh the partition manager before forcing the file system to remount.
     DWORD bytes = 0;
     auto disk = AutoHandle(CreateFileW(DiskPath(diskNumber).c_str(), GENERIC_READ,
                                        kShare, nullptr, OPEN_EXISTING, 0, nullptr));
-    bool diskUpdated = disk && DeviceIoControl(disk.get(), IOCTL_DISK_UPDATE_PROPERTIES,
-                                               nullptr, 0, nullptr, 0, &bytes, nullptr);
+    const bool diskUpdated = disk && DeviceIoControl(disk.get(), IOCTL_DISK_UPDATE_PROPERTIES,
+                                                     nullptr, 0, nullptr, 0, &bytes, nullptr);
     const DWORD updateError = diskUpdated ? ERROR_SUCCESS : GetLastError();
     size_t unresolved = 0;
     std::wstring reasons;
     for (const auto& volume : volumeDevices) {
-        bool liveReadonly = false;
-        bool known = ReadMountedReadOnly(volume, liveReadonly);
-        if (known && liveReadonly == desiredReadOnly) continue;
-
+        bool dismounted = false;
         DWORD lockError = ERROR_SUCCESS;
         DWORD dismountError = ERROR_SUCCESS;
-        bool dismounted = false;
         {
             auto handle = OpenVolume(volume);
             if (!handle) {
-                lockError = GetLastError();
-            } else if (!DeviceIoControl(handle.get(), FSCTL_LOCK_VOLUME,
-                                        nullptr, 0, nullptr, 0, &bytes, nullptr)) {
-                lockError = GetLastError();
+                dismountError = GetLastError();
             } else {
+                // An exclusive lock flushes pending writes when possible.
+                // If other processes keep the volume open, dismount it anyway:
+                // stale handles may then fail and unflushed writes may be lost.
+                const bool locked = DeviceIoControl(handle.get(), FSCTL_LOCK_VOLUME,
+                                                     nullptr, 0, nullptr, 0, &bytes, nullptr) != FALSE;
+                if (!locked) lockError = GetLastError();
                 dismounted = DeviceIoControl(handle.get(), FSCTL_DISMOUNT_VOLUME,
-                                            nullptr, 0, nullptr, 0, &bytes, nullptr) != FALSE;
+                                             nullptr, 0, nullptr, 0, &bytes, nullptr) != FALSE;
                 if (!dismounted) dismountError = GetLastError();
-                // Closing the locked handle releases the lock and permits remount.
             }
         }
-        // Force a fresh query after a safe remount. Never force-dismount a busy volume.
-        known = ReadMountedReadOnly(volume, liveReadonly);
-        if (!known || liveReadonly != desiredReadOnly) {
+        // Querying the volume by GUID forces Windows to mount a fresh instance.
+        bool liveReadOnly = false;
+        const bool known = dismounted && ReadMountedReadOnly(volume, liveReadOnly);
+        if (!known || liveReadOnly != desiredReadOnly) {
             ++unresolved;
-            reasons += L"卷 " + volume + L" 的当前文件系统状态未更新";
+            reasons += L"卷 " + volume + L" 未确认当前文件系统已切换";
+            if (dismountError != ERROR_SUCCESS)
+                reasons += L"（强制卸载失败：" + ErrorText(dismountError) + L"）";
+            else if (!known)
+                reasons += L"（无法重新读取挂载状态）";
             if (lockError != ERROR_SUCCESS)
-                reasons += L"（无法独占卷：" + ErrorText(lockError) + L"）";
-            else if (dismountError != ERROR_SUCCESS)
-                reasons += L"（无法重新挂载：" + ErrorText(dismountError) + L"）";
+                reasons += L"（此前无法获取独占锁：" + ErrorText(lockError) + L"）";
             reasons += L"。";
         }
     }
     if (unresolved == 0) {
-        detail = diskUpdated ? L"当前文件系统只读状态已验证。" :
-                 L"文件系统状态已验证，但磁盘重新枚举失败：" + ErrorText(updateError);
+        detail = L"目标卷已卸载并重新读取，当前文件系统只读状态已验证。";
+        if (!diskUpdated) detail += L"磁盘属性刷新请求未成功：" + ErrorText(updateError);
         return true;
     }
-    detail = reasons + L"磁盘上的持久属性已经修改，但当前系统可能仍使用旧的读写状态。请保存数据、安全弹出并重新插入 U 盘；在此之前不要继续写入。";
-    if (!diskUpdated) detail += L"磁盘属性刷新错误：" + ErrorText(updateError);
+    detail = reasons + L"磁盘上的持久属性已修改，但当前文件系统状态尚未确认，请安全弹出并重新插入 U 盘。";
+    if (!diskUpdated) detail += L"磁盘属性刷新请求未成功：" + ErrorText(updateError);
     return false;
 }
 
