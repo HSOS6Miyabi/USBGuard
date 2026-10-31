@@ -245,7 +245,12 @@ struct MiniState {
     bool receivedProgress = false;
     bool finished = false;
     bool succeeded = false;
+    bool dismissed = false;
+    bool closeHovered = false;
+    bool closePressed = false;
+    bool trackingMouse = false;
     bool smokeTest = false;
+    bool closeTest = false;
     bool openedDirectory = false;
     bool restoreExplorerPending = false;
     ULONGLONG lastExplorerAttempt = 0;
@@ -336,6 +341,15 @@ int Scale(int logical) {
 }
 COLORREF Color(BYTE r, BYTE g, BYTE b) { return RGB(r, g, b); }
 
+RECT CloseButtonRect() {
+    return RECT{g_ui.width - Scale(48), Scale(14),
+                g_ui.width - Scale(14), Scale(48)};
+}
+bool InCloseButton(POINT point) {
+    const RECT bounds = CloseButtonRect();
+    return PtInRect(&bounds, point) != FALSE;
+}
+
 HFONT MakeFont(int pointSize, int weight) {
     return CreateFontW(-MulDiv(pointSize, static_cast<int>(g_ui.dpi), 72),
                        0, 0, 0, weight, FALSE, FALSE, FALSE,
@@ -396,11 +410,27 @@ void DrawMiniWindow(HDC dc) {
         DrawIconEx(dc, Scale(23), Scale(20), g_ui.icon,
                    Scale(42), Scale(42), 0, nullptr, DI_NORMAL);
     Text(dc, g_ui.fontTitle, Color(255,255,255), L"USB GUARD",
-         RECT{Scale(78), Scale(19), w-Scale(26), Scale(47)},
+         RECT{Scale(78), Scale(19), w-Scale(60), Scale(47)},
          DT_SINGLELINE | DT_VCENTER);
     Text(dc, g_ui.fontSmall, Color(173, 207, 224), L"便携式 U 盘写保护",
-         RECT{Scale(78), Scale(47), w-Scale(26), Scale(69)},
+         RECT{Scale(78), Scale(47), w-Scale(60), Scale(69)},
          DT_SINGLELINE | DT_VCENTER);
+
+    const RECT close = CloseButtonRect();
+    if (g_ui.closeHovered) {
+        PaintRounded(dc, close, Scale(12), Color(45, 77, 106), Color(45, 77, 106));
+    }
+    HPEN closePen = CreatePen(PS_SOLID, (std::max)(1, Scale(2)), Color(235, 244, 250));
+    HGDIOBJ previousPen = SelectObject(dc, closePen);
+    const int cx = (close.left + close.right) / 2;
+    const int cy = (close.top + close.bottom) / 2;
+    const int arm = Scale(6);
+    MoveToEx(dc, cx - arm, cy - arm, nullptr);
+    LineTo(dc, cx + arm, cy + arm);
+    MoveToEx(dc, cx + arm, cy - arm, nullptr);
+    LineTo(dc, cx - arm, cy + arm);
+    SelectObject(dc, previousPen);
+    DeleteObject(closePen);
 
     Text(dc, g_ui.fontHeading, navy, g_ui.heading,
          RECT{Scale(23), Scale(94), w-Scale(96), Scale(122)},
@@ -468,6 +498,11 @@ void LayoutWindow(HWND window) {
         if (!SetWindowRgn(window,region,TRUE)) DeleteObject(region);
     }
 }
+void DismissMiniWindow(HWND window) {
+    g_ui.dismissed = true;
+    g_ui.closeHovered = false;
+    ShowWindow(window, SW_HIDE);
+}
 void PostUpdate(HWND window, size_t done, size_t total, const std::wstring& stage) {
     auto payload = std::make_unique<MessageData>();
     payload->percent = total ? static_cast<unsigned>((std::min)(done*100/total,size_t{100})) : 0u;
@@ -489,6 +524,59 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         return 0;
     case WM_ERASEBKGND:
         return 1;
+    case WM_MOUSEMOVE: {
+        const POINT point{static_cast<short>(LOWORD(lParam)),
+                          static_cast<short>(HIWORD(lParam))};
+        const bool hovered = InCloseButton(point);
+        if (hovered != g_ui.closeHovered) {
+            g_ui.closeHovered = hovered;
+            const RECT bounds = CloseButtonRect();
+            InvalidateRect(window, &bounds, FALSE);
+        }
+        if (!g_ui.trackingMouse) {
+            TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
+            g_ui.trackingMouse = TrackMouseEvent(&tracking) != FALSE;
+        }
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        g_ui.trackingMouse = false;
+        if (g_ui.closeHovered) {
+            g_ui.closeHovered = false;
+            const RECT bounds = CloseButtonRect();
+            InvalidateRect(window, &bounds, FALSE);
+        }
+        return 0;
+    case WM_SETCURSOR:
+        if (LOWORD(lParam) == HTCLIENT && g_ui.closeHovered) {
+            SetCursor(LoadCursorW(nullptr, IDC_HAND));
+            return TRUE;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    case WM_LBUTTONDOWN: {
+        const POINT point{static_cast<short>(LOWORD(lParam)),
+                          static_cast<short>(HIWORD(lParam))};
+        if (InCloseButton(point)) {
+            g_ui.closePressed = true;
+            SetCapture(window);
+            return 0;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+    case WM_LBUTTONUP:
+        if (g_ui.closePressed) {
+            const POINT point{static_cast<short>(LOWORD(lParam)),
+                              static_cast<short>(HIWORD(lParam))};
+            const bool dismiss = InCloseButton(point);
+            g_ui.closePressed = false;
+            if (GetCapture() == window) ReleaseCapture();
+            if (dismiss) DismissMiniWindow(window);
+            return 0;
+        }
+        return DefWindowProcW(window, message, wParam, lParam);
+    case WM_CAPTURECHANGED:
+        g_ui.closePressed = false;
+        return 0;
     case WM_PAINT: {
         PAINTSTRUCT paint{};
         HDC target=BeginPaint(window,&paint);
@@ -533,8 +621,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         if (g_ui.restoreExplorerPending) TryRestoreExplorerWindow(window);
         KillTimer(window,kAnimationTimer);
         SetTimer(window,kCloseTimer,100,nullptr);
-        SetWindowPos(window,HWND_TOPMOST,0,0,0,0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        if (!g_ui.dismissed)
+            SetWindowPos(window,HWND_TOPMOST,0,0,0,0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        if (g_ui.closeTest && IsWindowVisible(window)) g_ui.exitCode = 8;
         InvalidateRect(window,nullptr,FALSE);
         return 0;
     }
@@ -568,7 +658,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         return 0;
     }
     case WM_CLOSE:
-        if (g_ui.finished) DestroyWindow(window);
+        DismissMiniWindow(window);
         return 0;
     case WM_DESTROY:
         KillTimer(window,kAnimationTimer);
@@ -580,7 +670,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     }
 }
 
-int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest) {
+int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest,bool closeTest) {
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     using DpiContextFn = BOOL (WINAPI*)(HANDLE);
     auto dpiFn = user32 ? reinterpret_cast<DpiContextFn>(
@@ -601,6 +691,7 @@ int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest) {
         ReleaseDC(nullptr,screen);
     }
     g_ui.smokeTest=smokeTest;
+    g_ui.closeTest=closeTest;
     g_ui.requestedAction=action;
     g_ui.executableDirectory=ExecutableDirectory();
     CreateFonts();
@@ -624,6 +715,17 @@ int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest) {
     UpdateWindow(window);
     SetTimer(window,kAnimationTimer,80,nullptr);
 
+    if (closeTest) {
+        const RECT bounds = CloseButtonRect();
+        const LPARAM click = MAKELPARAM((bounds.left + bounds.right) / 2,
+                                       (bounds.top + bounds.bottom) / 2);
+        SendMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, click);
+        SendMessageW(window, WM_LBUTTONUP, 0, click);
+        if (!g_ui.dismissed || IsWindowVisible(window)) {
+            DestroyWindow(window);
+            return 8;
+        }
+    }
     if (smokeTest) {
         if (ExplorerArguments(L"E:\\") != L"/n,E:\\" ||
             ExplorerArguments(L"E:\\Example Folder\\") != L"/n,\"E:\\Example Folder\"") {
@@ -664,6 +766,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     LPWSTR* argv=CommandLineToArgvW(GetCommandLineW(),&argc);
     policy::Action action=policy::Action::Toggle;
     bool smokeTest=false;
+    bool closeTest=false;
     if (argv && argc>=2) {
         if (wcscmp(argv[1],L"--worker")==0) {
             const policy::Action workerAction=argc==4?policy::ParseAction(argv[2]):policy::Action::Invalid;
@@ -671,7 +774,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
             LocalFree(argv);
             return Worker(workerAction,pipe);
         }
-        smokeTest = argc==2 && wcscmp(argv[1],L"--ui-self-test")==0;
+        closeTest = argc==2 && wcscmp(argv[1],L"--ui-close-test")==0;
+        smokeTest = closeTest || (argc==2 && wcscmp(argv[1],L"--ui-self-test")==0);
         if (!smokeTest)
             action=argc==2?policy::ParseAction(argv[1]):policy::Action::Invalid;
     }
@@ -684,7 +788,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         CloseHandle(mutex);
         return 0;
     }
-    const int code=RunMiniWindow(instance,action,smokeTest);
+    const int code=RunMiniWindow(instance,action,smokeTest,closeTest);
     ReleaseMutex(mutex);
     CloseHandle(mutex);
     return code;
