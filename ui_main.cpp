@@ -262,7 +262,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         return result.exitCode;
     }
     if (args) LocalFree(args);
-    SetProcessDPIAware();
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    using DpiContextFn = BOOL (WINAPI*)(HANDLE);
+    auto setContext = user32 ? reinterpret_cast<DpiContextFn>(
+        GetProcAddress(user32, "SetProcessDpiAwarenessContext")) : nullptr;
+    const HANDLE perMonitorV2 = reinterpret_cast<HANDLE>(static_cast<INT_PTR>(-4));
+    if (!setContext || !setContext(perMonitorV2)) {
+        using DpiAwareFn = BOOL (WINAPI*)();
+        auto setAware = user32 ? reinterpret_cast<DpiAwareFn>(
+            GetProcAddress(user32, "SetProcessDPIAware")) : nullptr;
+        if (setAware) setAware();
+    }
     HDC desktop = GetDC(nullptr);
     if (desktop) { g_dpi = GetDeviceCaps(desktop, LOGPIXELSX); ReleaseDC(nullptr, desktop); }
     INITCOMMONCONTROLSEX ic{sizeof(ic), ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES};
