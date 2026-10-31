@@ -1,90 +1,75 @@
-# USB Guard · 便携式 U 盘持久写保护
+# USB Guard
 
-两个独立的 Windows 原生 Win32 程序，使用 C++17、Windows SDK 和操作系统自带接口，不需要安装第三方运行库。
+便携式 Windows U 盘写保护程序。使用 C++17、原生 Win32 API 和 Windows SDK 开发。发布的可执行文件不依赖第三方运行框架。
 
-| 程序 | 使用方式 | 运行期间的界面 | 权限 |
-|---|---|---|---|
-| `USBGuardUI.exe` | 双击进入完整管理界面 | 磁盘列表、卷复选框、操作按钮、进度条、结果提示 | EXE 清单要求管理员权限 |
-| `USBGuardToast.exe` | 双击直接切换程序所在 U 盘的只读状态 | Windows 10 1703+ 系统 Toast 进度条；旧版 Windows 显示兼容提示 | 普通进程发送通知，短暂管理员进程执行磁盘操作 |
+## 两种界面
 
-两个版本都支持 `--protect`、`--unprotect`、`--toggle`、`--status`。通知版没有参数时执行 `--toggle`；界面版没有参数时打开图形界面。命令行模式仅操作 **当前 EXE 所在 USB 物理磁盘**，不会自动选择其他磁盘。
+| 程序 | 功能 | 权限 |
+|---|---|---|
+| `USBGuardUI.exe` | 完整管理界面，可选择 USB 磁盘及可识别卷，显示操作进度和结果 | 启动时请求管理员权限 |
+| `USBGuardMini.exe` | 在屏幕右下角显示独立的精简窗口，自动选择程序所在 U 盘，实时显示进度；完成后显示结果并在约 4 秒后自动关闭 | 普通权限窗口，通过 Windows UAC 启动短暂的管理员工作进程 |
 
-## 持久写保护的实现
+迷你窗口使用 Windows 原生 GDI 双缓冲绘制，支持系统 DPI 缩放、圆角卡片、进度条以及状态颜色。它只在执行期间存在，不创建通知、开始菜单快捷方式、注册表项、服务或驻留进程。
 
-**不使用当前 Windows 安装环境保存的磁盘只读属性。** 所有持久性更改使用 `IOCTL_VOLUME_SET_GPT_ATTRIBUTES`，设置 `RevertOnClose = FALSE`：
+启动 `USBGuardMini.exe` 后，窗口立即提示用户在 Windows 用户账户控制对话框中点击“是”，随后直接发起 UAC 请求，无额外确认步骤。磁盘操作在独立工作线程中进行，窗口保持响应。结果显示约 4 秒后自动退出，进程结束后不会继续占用 U 盘上的可执行文件。
 
-- **MBR 基本磁盘：** 对一个可识别卷执行一次 `ApplyToAllConnectedVolumes = TRUE` 操作；按照 Windows 的 MBR 基本磁盘规则，其持久属性影响整个磁盘的所有卷。即使磁盘有其他未列出的卷，也会受到影响。
-- **GPT 基本磁盘：** GPT 没有同样作用于全盘的分区只读位，因此对选定的 Windows 可识别 Microsoft Basic Data 分区逐一修改 `GPT_BASIC_DATA_ATTRIBUTE_READ_ONLY`。无法识别的分区不会被默认选中或修改。
-- 保留除只读位以外的所有 GPT/卷属性。修改之前检查设备、卷所属物理磁盘和分区类型，修改之后再次读取只读状态。
-- 只接受能够通过 `IOCTL_STORAGE_QUERY_PROPERTY` 验证 USB 总线的 MBR/GPT 基本磁盘；排除 Windows 系统目录所在磁盘，不处理跨磁盘卷。
-- 默认只选择 EXE 所在的 USB 磁盘；完整界面可以显式选择其他经识别的 USB 磁盘。
-- 更新属性后请求 `IOCTL_DISK_UPDATE_PROPERTIES`，对目标卷执行 `FSCTL_LOCK_VOLUME`，即使独占锁失败也会尝试 `FSCTL_DISMOUNT_VOLUME` 强制卸载，然后重新读取实际挂载的文件系统只读状态。强制卸载可能中断正在使用 U 盘的程序或造成未保存数据丢失，操作前必须关闭文件并保存数据；实际只读状态无法确认时会报告失败并提示重新插入。
+两个程序都支持 `--protect`、`--unprotect`、`--toggle` 和 `--status`。迷你版双击默认执行 `--toggle`，完整界面双击后显示磁盘管理窗口。命令行方式默认操作当前 EXE 所在的 USB 物理磁盘。
 
-软件只读是 Windows 对存储属性的解释和执行。具有管理权限或直接磁盘访问能力的恶意软件可能解除或绕过这种保护，Linux/macOS 对 Windows 持久卷属性的处理也可能不同。需要抵御已经控制操作系统的勒索软件，应使用物理写保护 U 盘或硬件写入阻断设备。
+## 写保护机制
 
-## 通知版的生命周期
+所有持久性修改均通过 `IOCTL_VOLUME_SET_GPT_ATTRIBUTES`，并设置 `RevertOnClose = FALSE`。
 
-通知版采用同一 EXE 的短暂双进程架构：
+- MBR 基本磁盘：通过 `ApplyToAllConnectedVolumes = TRUE` 更新磁盘关联卷的持久只读属性。
+- GPT 基本磁盘：为选中的 Microsoft Basic Data 分区逐个更新只读属性。
+- 保留其他卷属性，只修改只读标志。排除 Windows 系统磁盘、无法确认的物理磁盘和跨物理磁盘卷。
+- 修改后通过 `IOCTL_DISK_UPDATE_PROPERTIES` 请求刷新磁盘属性，并使用 `FSCTL_DISMOUNT_VOLUME` 重新挂载目标卷，验证当前文件系统实际只读状态。
+- 如果 Windows 未能确认文件系统已经切换，报告失败并提示安全弹出、重新插入 U 盘。
 
-1. 普通权限进程负责通知并创建会话内临时命名管道，不显示应用主窗口。
-2. 先显示“需要管理员权限”的通知，提示用户在 Windows 用户账户控制对话框中点击“是”，随即通过系统 `runas` 请求 UAC 权限并启动工作进程。无需点击通知中的按钮，也不会增加人为等待时间。工作进程只负责磁盘操作和进度报告。
-3. Windows 10 1703 及更新版本只使用原生 Toast：开始时发布一条进度通知，进度使用 `ToastNotifier.Update` 更新同一条通知；结束时移除进度内容并发布一条结果通知。Windows 7/8 等旧版系统使用 `Shell_NotifyIconW` 发送兼容提示，不在每次进度更新时重新发送通知。
-4. 管理员进程操作完成后退出，普通进程发布最终结果、删除本次创建的临时快捷方式并立即退出，不安装服务或保留后台进程。
+**数据安全：** 重新挂载可能强制卸载仍被其他程序使用的卷。执行前请先保存文件并关闭占用 U 盘的应用程序。未保存的数据可能丢失。软件写保护也无法抵御拥有管理员权限或内核权限的恶意程序；需要可靠的不可写保护时，应使用带硬件写保护的设备。
 
-旧版 Windows 的通知气球依赖运行中的通知图标，进程退出后可能提前消失。通知是否呈现由系统设置决定，程序不会为了维持通知而占用 U 盘。
+## 使用方式
 
-**临时通知身份：** 通知版在本次执行期间创建名称唯一的开始菜单快捷方式，使用固定 `AppUserModelID` (`PortableUSBGuard.Notifications`) 管理通知。启动后清除相同应用身份以前的通知，结束时清除进度通知并留下本次结果通知。正常退出时删除临时快捷方式，不覆盖现有快捷方式、不创建持久注册表项或 COM 激活程序。系统强制终止或突然断电可能使快捷方式未能删除。通知不包含用于重新启动操作的按钮；操作系统的通知中心及系统运行记录由 Windows 管理。
+将相应 EXE 放入目标 U 盘根目录或子目录，双击运行。
 
-## 操作
-
-将任意一个 EXE 放在要保护的 U 盘内。通知版双击会自动识别 EXE 所在 U 盘并切换状态，遇到 UAC 时确认管理员权限。界面版可查看文件系统、勾选卷并通过按钮选择启用、解除或切换保护。**执行完成后建议安全弹出并重新插入，再进行写入验证。**
-
-在命令提示符中：
+也可使用命令行：
 
 ```bat
-USBGuardToast.exe --protect
-USBGuardToast.exe --unprotect
-USBGuardToast.exe --toggle
-USBGuardToast.exe --status
+USBGuardMini.exe --protect
+USBGuardMini.exe --unprotect
+USBGuardMini.exe --toggle
+USBGuardMini.exe --status
 
 USBGuardUI.exe --protect
 USBGuardUI.exe --unprotect
 USBGuardUI.exe --status
 ```
 
-`--toggle`：所有选中卷均为只读时解除只读；只要存在可写卷，就启用只读。`--status` 只读取状态。成功退出码为 0，无效参数为 2，无法找到可靠目标或 UAC 被取消为 3，操作失败为 4。
+`--toggle` 在所有选定卷都处于只读时解除保护，否则启用保护。成功时退出码为 0，参数错误为 2，无法确认目标或用户取消 UAC 为 3，执行失败为 4。
 
-两个 EXE 使用 Windows GUI 子系统，批处理可通过 `start /wait` 等待结束：
+## 编译
 
-```bat
-start /wait "" "E:\\USBGuardToast.exe" --toggle
-```
-
-## Windows 构建
-
-需要 Visual Studio 2022（包含 MSVC、Windows 10/11 SDK、C++ 桌面开发工具）、CMake 3.21+ 以及 Python 3（仅用于编译期间生成多尺寸图标，使用 Python 标准库）。运行生成的 EXE 无需安装 Python、NuGet、Qt、.NET 或 Windows App SDK。
+需要 Visual Studio 2022（C++ 桌面开发工具、Windows SDK）、CMake 3.21+ 和 Python 3。Python 仅用于编译期间生成多尺寸图标，不是运行依赖。
 
 ```bat
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-也可以双击 `BUILD_WINDOWS.cmd`，脚本会进行 Release 构建、运行测试，并将两个 EXE 复制到 `dist` 目录。产物分别是 `build\Release\USBGuardUI.exe` 和 `build\Release\USBGuardToast.exe`。两种清单和由 `assets/generate_icon.py` 生成的 16～256 像素 EXE 图标都直接嵌入两个程序，可以分别独立拷贝到 U 盘。`USBGuardToast.exe` 使用运行时加载的 Windows Runtime 接口发布 Toast；Windows 7 可进入 `Shell_NotifyIconW` 兼容流程，无需 Windows App SDK。
+也可以直接运行 `BUILD_WINDOWS.cmd`。完成后可在 `dist` 目录取得两个独立的 EXE。
 
-Windows 7/8 应在真实设备上测试。通知 API 兼容性并不意味着该操作系统已经获得所有安全更新。
+## 自动测试
 
-## 验证
+GitHub Actions 对 x86、x64、ARM64 分别编译完整界面和迷你窗口，检查 PE 架构、Windows GUI 子系统、资源及程序清单。
 
-项目附带无磁盘写入的策略单元测试。`ctest` 可以在 Linux 上测试跨平台策略逻辑，但 Win32 程序必须在 Windows 环境中编译和运行，GitHub Actions 在 Windows 上分别构建 x86、x64、ARM64 两种应用程序，并验证 PE 格式、目标架构、资源文件和独立策略逻辑。 Windows x64 运行器还会创建一次性 MBR/GPT 虚拟磁盘，使用与正式版相同的引擎执行写入、设置持久只读、拒绝写入、解除只读及重新写入验证。测试构建仅接受文件支持的虚拟磁盘，正常 Release 的 EXE 仍限定为 USB 磁盘；虚拟磁盘测试不验证真实 U 盘的固件、USB 控制器及通知界面显示。x86/x64 执行策略测试；ARM64 由 x64 Windows 运行器交叉编译，执行源码检查及 PE 静态验证。每次 `main` 分支提交通过所有检查后，会创建带 SHA-256 校验值的 GitHub Release；`v*` 标签也会触发发布。
+x86 和 x64 运行策略单元测试、源代码检查及迷你窗口自身的绘制与结束状态测试。x64 还会创建一次性 MBR/GPT 虚拟磁盘，验证写入、启用只读、拒绝写入、解除只读以及恢复写入的完整过程。ARM64 通过交叉编译和静态检查进行验证。CI 成功后自动发布六个 EXE、三个 ZIP 和 SHA-256 校验文件到 GitHub Releases。
 
-用于验证的测试 U 盘应有完整的数据备份。测试包括 MBR/GPT、含多个分区的 U 盘、NTFS/FAT32/exFAT、Windows 不识别的分区、管理员权限取消、U 盘重新插入、Windows 7/8/10/11 的通知、进度更新及临时通知身份清理，以及通知版操作后能否立即弹出设备。
+虚拟磁盘测试与实际 U 盘控制器存在差异。Windows 执行器上的窗口测试检查窗口消息处理、绘制和退出行为，无法代替真实桌面上的视觉检查。
 
-## Microsoft API 文档
+## 参考文档
 
 - https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/attributes-volume
 - https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-ioctl_volume_get_gpt_attributes
-- https://learn.microsoft.com/en-us/windows/win32/shell/notification-area
-- https://learn.microsoft.com/en-us/windows/win32/shell/enable-desktop-toast-with-appusermodelid
-- https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotifier.update
-- https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shell_notifyiconw
+- https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_dismount_volume
+- https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createwindowexw
+- https://learn.microsoft.com/en-us/windows/win32/gdi/double-buffering
