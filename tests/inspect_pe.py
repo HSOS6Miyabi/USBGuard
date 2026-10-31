@@ -36,6 +36,12 @@ def inspect(path: Path, expected_machine: int) -> set[str]:
     assert magic in (0x10B, 0x20B)
     subsystem = struct.unpack_from('<H', data, optional+68)[0]
     assert subsystem == 2, f'{path}: executable is not a Windows GUI application'
+    min_system = struct.unpack_from('<HH', data, optional+48)
+    if expected_machine == 0x014C:
+        assert min_system <= (5, 1), (
+            f'{path}: x86 subsystem requires {min_system[0]}.{min_system[1]}, '
+            'but Windows XP requires 5.01 or earlier'
+        )
     directory = optional + (112 if magic == 0x20B else 96)
     assert directory+14*8 <= optional+optional_size, 'Truncated PE data directories'
     resource_rva, resource_size = struct.unpack_from('<II', data, directory+2*8)
@@ -68,6 +74,27 @@ def inspect(path: Path, expected_machine: int) -> set[str]:
         return data[position:end].decode('ascii').lower()
 
     imports: set[str] = set()
+    imported_functions: set[str] = set()
+    def inspect_thunks(rva: int):
+        if not rva:
+            return
+        thunk_size = 8 if magic == 0x20B else 4
+        ordinal_flag = 1 << (63 if magic == 0x20B else 31)
+        fmt = '<Q' if magic == 0x20B else '<I'
+        for index in range(8192):
+            entry_offset = offset(rva + index * thunk_size)
+            value = struct.unpack_from(fmt, data, entry_offset)[0]
+            if value == 0:
+                break
+            if value & ordinal_flag:
+                continue
+            name_offset = offset(value) + 2
+            end = data.find(b'\\0', name_offset, min(len(data), name_offset + 256))
+            assert end > name_offset, f'{path}: malformed imported function name'
+            imported_functions.add(data[name_offset:end].decode('ascii'))
+        else:
+            raise AssertionError(f'{path}: unterminated function import thunk table')
+
     # Regular IMAGE_IMPORT_DESCRIPTOR entries: 20 bytes each.
     import_rva, import_size = struct.unpack_from('<II', data, directory+8)
     if import_rva:
@@ -78,6 +105,7 @@ def inspect(path: Path, expected_machine: int) -> set[str]:
             if not any(descriptor):
                 break
             imports.add(dllname(descriptor[3]))
+            inspect_thunks(descriptor[0] or descriptor[4])
         else:
             raise AssertionError(f'{path}: unterminated PE import table')
 
@@ -102,6 +130,15 @@ def inspect(path: Path, expected_machine: int) -> set[str]:
     runtimes = sorted(d for d in imports if d.startswith(RUNTIME_PREFIXES))
     assert not runtimes, f'{path}: dynamic C/C++ runtime required: {runtimes}'
     assert not foreign, f'{path}: unexpected non-system DLL dependencies: {foreign}'
+    if expected_machine == 0x014C:
+        newer_apis = {
+            'GetNamedPipeClientProcessId', 'GetTickCount64', 'CancelIoEx',
+            'GetProcessId', 'SetProcessDpiAwarenessContext',
+            'SetProcessDPIAware', 'GetFinalPathNameByHandleW',
+            'InitializeCriticalSectionEx', 'InitOnceExecuteOnce',
+        }
+        direct = sorted(imported_functions & newer_apis)
+        assert not direct, f'{path}: newer Windows functions imported directly: {direct}'
     print(f'{path}: PE machine=0x{machine:04x}; GUI; icon/manifest; '
           f'only Windows DLL imports: {", ".join(sorted(imports))}')
     return imports
