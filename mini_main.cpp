@@ -3,12 +3,18 @@
 #include "command.hpp"
 #include <windows.h>
 #if defined(_WIN32_WINNT) && _WIN32_WINNT <= 0x0501
-// v7.1A ObjBase.h assumes IUnknown has been declared first.
-#define COM_NO_WINDOWS_H
-#include <unknwn.h>
-#undef COM_NO_WINDOWS_H
+// Windows 7.1A SDK headers predate the current C++ parser. These stable
+// Ole32 exports exist on XP and need no COM interface declarations.
+extern "C" __declspec(dllimport) HRESULT WINAPI CoCreateGuid(GUID*);
+extern "C" __declspec(dllimport) int WINAPI StringFromGUID2(REFGUID, LPOLESTR, int);
+extern "C" __declspec(dllimport) HRESULT WINAPI CoInitializeEx(LPVOID, DWORD);
+extern "C" __declspec(dllimport) void WINAPI CoUninitialize();
+#ifndef COINIT_APARTMENTTHREADED
+#define COINIT_APARTMENTTHREADED 0x2
 #endif
+#else
 #include <objbase.h>
+#endif
 #include <shellapi.h>
 #include <sddl.h>
 #include <algorithm>
