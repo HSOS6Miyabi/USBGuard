@@ -148,7 +148,7 @@ struct NativeToast {
     TemporaryNotificationIdentity identity;
     Rt runtime;
     ComPtr<N::IToastNotifier> notifier;
-    ComPtr<N::IToastNotificationHistory2> history;
+    ComPtr<N::IToastNotificationHistory> history;
     bool available = false;
     bool progressStarted = false;
     unsigned sequence = 1;
@@ -163,10 +163,8 @@ struct NativeToast {
             FAILED(manager->CreateToastNotifierWithId(appId.raw, &notifier))) return false;
         // Stable AppUserModelID lets us remove earlier USBGuard notifications.
         ComPtr<N::IToastNotificationManagerStatics2> manager2;
-        ComPtr<N::IToastNotificationHistory> baseHistory;
-        if (SUCCEEDED(manager.As(&manager2)) && manager2 &&
-            SUCCEEDED(manager2->get_History(&baseHistory)) && baseHistory)
-            baseHistory.As(&history);
+        if (SUCCEEDED(manager.As(&manager2)) && manager2)
+            manager2->get_History(&history);
         if (history) history->ClearWithId(appId.raw);
         available = true;
         return true;
