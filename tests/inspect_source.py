@@ -16,10 +16,12 @@ assert 'IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS' in engine
 assert 'g_windowsDisks.count' in engine
 assert 'PBM_SETPOS' in ui and 'LVS_EX_CHECKBOXES' in ui
 assert 'Shell_NotifyIconW' in toast and 'NIM_DELETE' in toast
-assert 'EnsureNotificationIdentity' not in toast
-assert 'FOLDERID_Programs' not in toast
+assert 'TemporaryNotificationIdentity' in toast
+assert 'FOLDERID_Programs' in toast and 'PKEY_AppUserModel_ID' in toast
+assert 'DeleteFileW(shortcutPath.c_str())' in toast
+assert 'USBGuard.Session.' in toast and 'CoCreateGuid' in toast
+assert 'UpdateWithTag' in toast and 'progressValue' in toast
 assert 'RegCreateKey' not in toast and 'RegSetValue' not in toast
-assert 'Save(' not in toast and 'AppUserModelID' not in toast
 assert 'ShellExecuteExW' in toast and 'GetNamedPipeClientProcessId' in toast
 assert 'WaitForSingleObject(launch.hProcess' in toast
 assert 'USBGuardToast' in cmake and 'USBGuardUI' in cmake
