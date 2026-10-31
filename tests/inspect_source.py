@@ -95,6 +95,6 @@ for i in range(count):
         dib_height = struct.unpack_from('<i', image, 8)[0]
         assert dib_height == 2 * actual_size
     if actual_size == 256:
-        assert image.startswith(b'\\x89PNG\\r\\n\\x1a\\n')
+        assert image.startswith(b'\x89PNG\r\n\x1a\n')
 assert {(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)} <= sizes
 print('Source, manifest and icon checks passed')
