@@ -94,8 +94,31 @@ def encode_png(size, pixels):
             + png_chunk(b'IEND', b''))
 
 
+
+def encode_dib(size, pixels):
+    """Encode an XP-compatible 32-bit icon DIB with an AND transparency mask."""
+    stride = size * 4
+    mask_stride = ((size + 31) // 32) * 4
+    bitmap = bytearray()
+    mask = bytearray()
+    for y in range(size - 1, -1, -1):
+        row = pixels[y * stride:(y + 1) * stride]
+        for x in range(size):
+            r, g, b, a = row[x * 4:x * 4 + 4]
+            bitmap.extend((b, g, r, a))
+        mask_row = bytearray(mask_stride)
+        for x in range(size):
+            if row[x * 4 + 3] < 32:
+                mask_row[x // 8] |= 0x80 >> (x % 8)
+        mask.extend(mask_row)
+    header = struct.pack(
+        '<IiiHHIIiiII', 40, size, size * 2, 1, 32, 0,
+        len(bitmap) + len(mask), 0, 0, 0, 0
+    )
+    return header + bytes(bitmap) + bytes(mask)
+
 def generate_icon(output_path):
-    images = [encode_png(size, render(size)) for size in SIZES]
+    images = [encode_dib(size, render(size)) if size <= 48 else encode_png(size, render(size)) for size in SIZES]
     header = struct.pack('<HHH', 0, 1, len(SIZES))
     location = 6 + 16 * len(SIZES)
     directory = bytearray()
