@@ -1,62 +1,104 @@
-# USB Guard
+# USBGuard
 
-跨平台 U 盘写保护工具，提供 Windows 和 Linux 两种版本。Windows 版使用 C++17、原生 Win32 API 和 Windows SDK，发布的 EXE 不依赖第三方运行框架。
+让 U 盘切换为只读，减少误操作和恶意程序写入文件的风险。支持 **Windows** 和 **Linux**，无需将程序安装到电脑上。
 
-## Linux 版本
+[下载最新版本](https://github.com/HSOS6Miyabi/USBGuard/releases/latest)
 
-Linux 版提供 `USBGuardLinux` GTK 3 图形界面及 `USBGuardLinuxCLI` 命令行程序，支持 x86_64 和 aarch64。图形版兼容使用 X11、Wayland 或 Xwayland 的桌面环境及窗口管理器；不需要特定桌面环境的托盘、通知或其他专有接口。它通过 `pkexec` 请求系统权限，在未配置图形授权代理的环境中可以使用 `sudo` 启动 CLI。
+## Windows：下载后直接使用
 
-Linux 版利用内核 `BLKROSET` 和重新挂载实现当前连接期间的只读保护，**拔出再插入后不会自动保留**；它不会修改磁盘分区表或在主机安装系统服务。请参阅 [Linux 使用说明](linux/README.md)，了解安装依赖、桌面兼容性和安全限制。
+**推荐使用 `USBGuardMini.exe`。** 将它复制到需要保护的 U 盘里，双击即可切换写保护状态。
 
-## Windows 版本
+1. 首次运行时，按 Windows 的提示同意管理员授权。
+2. 右下角会出现一个小窗口，显示正在处理哪个分区、执行到了哪一步。
+3. 操作完成后，窗口显示结果，稍后自动关闭，并尝试重新打开程序所在的 U 盘目录。
 
-## 两种界面
+再次双击可以解除保护。如果 U 盘上有多个带盘符的分区，程序会检查它们的状态：只要有一个分区可写，切换操作就会尝试把所有目标分区设为只读；只有全部已保护时才会解除。
 
-| 程序 | 功能 | 权限 |
-|---|---|---|
-| `USBGuardUI.exe` | 完整管理界面，可选择 USB 磁盘及可识别卷，显示操作进度和结果 | 启动时请求管理员权限 |
-| `USBGuardMini.exe` | 在屏幕右下角显示独立的精简窗口，自动选择程序所在 U 盘，实时显示进度；完成后显示结果并在约 4 秒后自动关闭 | 普通权限窗口，通过 Windows UAC 启动短暂的管理员工作进程 |
+需要自己选择磁盘、查看各分区状态或使用更完整的界面，可以打开 **`USBGuardUI.exe`**。
 
-迷你窗口使用 Windows 原生 GDI 双缓冲绘制，支持系统 DPI 缩放、圆角卡片、细分进度条以及状态颜色。进度展示包括写入持久属性、逐卷复查、刷新磁盘信息、请求独占访问、强制卸载卷、重新挂载卷和验证只读状态，每个阶段显示目标盘符。它只在执行期间存在，不创建通知、开始菜单快捷方式、注册表项、服务或驻留进程。
+### 该下载哪个 Windows 文件？
 
-启动 `USBGuardMini.exe` 后，窗口立即提示用户在 Windows 用户账户控制对话框中点击“是”，随后直接发起 UAC 请求，无额外确认步骤。磁盘操作在独立工作线程中进行，窗口保持响应。操作成功时，普通权限的迷你窗口进程会明确启动 `explorer.exe`，请求新窗口打开 EXE 所在目录；如果刚重新挂载的卷暂时无法访问，会在约 4 秒的完成状态显示期间进行有限次数的重试。`--status` 查询、失败操作以及界面测试不触发此行为。结果显示约 4 秒后自动退出，进程结束后不会继续占用 U 盘上的可执行文件。
+| 电脑类型 | 文件 |
+| --- | --- |
+| 大多数 Windows 10/11 电脑（Intel、AMD 64 位） | `USBGuard-x64.zip` |
+| 32 位 Windows，包括面向 Windows XP 的兼容构建 | `USBGuard-x86.zip` |
+| Windows ARM64 电脑 | `USBGuard-ARM64.zip` |
 
-两个程序都支持 `--protect`、`--unprotect`、`--toggle` 和 `--status`。迷你版双击默认执行 `--toggle`，完整界面双击后显示磁盘管理窗口。命令行方式默认操作当前 EXE 所在的 USB 物理磁盘。
+每个 ZIP 包都有 Mini 和完整界面两个 EXE。也可以在 Release 页面直接下载单个 EXE。Windows 版已静态链接 MSVC 运行库，无需另外安装 Visual C++ 运行库。x86 版本经过 Windows XP 目标编译和相关自动检查，实际 XP 机器上的运行仍需验证。
 
-## 写保护机制
+**Windows 的写保护会持久保存。** 在程序退出、U 盘拔出并重新插入后，已成功设置的卷属性通常仍然有效，直到主动解除。程序会强制卸载目标卷、刷新磁盘状态，并检查当前文件系统是否真的切换成功；如果检查失败，会明确提示。
 
-所有持久性修改均通过 `IOCTL_VOLUME_SET_GPT_ATTRIBUTES`，并设置 `RevertOnClose = FALSE`。
+> **操作前请保存 U 盘上的文件，并关闭正在使用 U 盘的程序。** 强制卸载可能让未保存的数据丢失。不要在 Windows 系统盘上使用这个工具。
 
-- MBR 基本磁盘：通过 `ApplyToAllConnectedVolumes = TRUE` 更新磁盘关联卷的持久只读属性。
-- GPT 磁盘：操作当前 Windows 已分配盘符、能够访问的卷，不以 Microsoft Basic Data 分区类型为必要条件。排除 MSR 和动态磁盘保留分区。
-- 保留其他卷属性，只修改只读标志。排除 Windows 系统磁盘、无法确认的物理磁盘和跨物理磁盘卷。
-- 修改后通过 `IOCTL_DISK_UPDATE_PROPERTIES` 请求刷新磁盘属性，并使用 `FSCTL_DISMOUNT_VOLUME` 重新挂载目标卷，验证当前文件系统实际只读状态。
-- 设置只读和解除只读时，会重新核查每个选定卷的持久属性与文件系统实际状态。部分卷已保护、部分卷可写时，`--toggle` 统一将所有选定卷设置为只读；只有全部已保护时才统一解除。未能确认状态时报告失败。
+### Windows 命令行
 
-**数据安全：** 重新挂载可能强制卸载仍被其他程序使用的卷。执行前请先保存文件并关闭占用 U 盘的应用程序。未保存的数据可能丢失。软件写保护也无法抵御拥有管理员权限或内核权限的恶意程序；需要可靠的不可写保护时，应使用带硬件写保护的设备。
-
-## 使用方式
-
-将相应 EXE 放入目标 U 盘根目录或子目录，双击运行。
-
-也可使用命令行：
+把 EXE 放在目标 U 盘里，然后在命令提示符中执行：
 
 ```bat
 USBGuardMini.exe --protect
 USBGuardMini.exe --unprotect
 USBGuardMini.exe --toggle
 USBGuardMini.exe --status
-
-USBGuardUI.exe --protect
-USBGuardUI.exe --unprotect
-USBGuardUI.exe --status
 ```
 
-`--toggle` 在所有选定卷都处于只读时解除保护，否则启用保护。成功时退出码为 0，参数错误为 2，无法确认目标或用户取消 UAC 为 3，执行失败为 4。
+这些参数也可用于 `USBGuardUI.exe`。省略参数时，Mini 默认切换写保护状态。
 
-## 编译
+## Linux：图形界面和命令行都能用
 
-需要 Visual Studio 2022（C++ 桌面开发工具、Windows SDK）、CMake 3.21+ 和 Python 3。x86 构建使用可选的 Visual Studio 2017 `v141_xp` 工具集，在同一 x86 可执行文件中通过运行时动态解析保留较新 Windows API，并在 Windows XP SP3 上使用兼容接口。Python 仅用于编译期间生成多尺寸图标，不是运行依赖。
+Linux 提供两个程序：
+
+- **`USBGuardLinux`**：带进度条的 GTK 3 图形界面，可在 X11、Wayland 桌面下使用。
+- **`USBGuardLinuxCLI`**：命令行版本，不需要图形桌面，适合服务器和轻量级窗口管理器。
+
+从 Release 下载对应的 `USBGuard-Linux-x86_64.tar.gz` 或 `USBGuard-Linux-aarch64.tar.gz`，解压后在程序所在目录运行：
+
+```sh
+chmod +x USBGuardLinux USBGuardLinuxCLI
+./USBGuardLinux
+```
+
+在图形界面中选择 U 盘，点击“切换保护”即可。需要修改设备状态时，程序会通过系统的 `pkexec` 请求管理员权限。图形界面需要安装 GTK 3；Sway、Hyprland、i3、Openbox 等桌面如果没有运行 polkit 授权代理，可以使用命令行：
+
+```sh
+./USBGuardLinuxCLI --list
+./USBGuardLinuxCLI --device /dev/sdb --status
+sudo ./USBGuardLinuxCLI --device /dev/sdb --protect
+sudo ./USBGuardLinuxCLI --device /dev/sdb --unprotect
+```
+
+请把示例中的 `/dev/sdb` 换成实际 USB 磁盘的设备名。程序会检查设备是否属于 USB 总线，避免误操作普通系统磁盘。
+
+**Linux 的只读保护只在本次连接期间有效。** 拔掉 U 盘后再插入，通常需要重新启用。Linux 版通过重新挂载文件系统和设置内核块设备只读状态实现保护，不会修改分区表，也不会安装常驻服务。
+
+更多说明见 [Linux 使用文档](linux/README.md)。
+
+## 下载全部版本
+
+Release 页面还提供 **`USBGuard-All-In-One.zip`**，将所有 Windows、Linux 架构的程序放在同一个压缩包内，按操作系统和架构分类：
+
+```text
+Windows/
+  x86/       USBGuardMini.exe、USBGuardUI.exe
+  x64/       USBGuardMini.exe、USBGuardUI.exe
+  ARM64/     USBGuardMini.exe、USBGuardUI.exe
+Linux/
+  x86_64/    USBGuardLinux、USBGuardLinuxCLI
+  aarch64/   USBGuardLinux、USBGuardLinuxCLI
+  README.md
+README.md
+```
+
+只需要某一个系统的程序时，下载对应的小包即可。Release 同时提供 `SHA256SUMS.txt`，可以核对下载文件是否完整。
+
+## 使用前需要知道
+
+软件写保护能防止常规文件写入，但具有管理员权限的程序仍可能修改磁盘状态。它不能替代带有**硬件写保护开关**的 U 盘。
+
+程序只处理识别出的 USB 设备及符合条件的卷。多卷操作会检查实际状态；发生错误时会尝试恢复已修改的状态，并报告失败。
+
+## 自行编译与测试
+
+Windows 需要 Visual Studio 2022、Windows SDK、CMake 和 Python 3：
 
 ```bat
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
@@ -64,20 +106,12 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-也可以直接运行 `BUILD_WINDOWS.cmd`。完成后可在 `dist` 目录取得两个独立的 EXE。
+Linux 需要 C++17 编译器、CMake；编译图形版还需要 GTK 3 开发包：
 
-## 自动测试
+```sh
+cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build-linux --parallel
+ctest --test-dir build-linux --output-on-failure
+```
 
-GitHub Actions 对 x86、x64、ARM64 分别编译完整界面和迷你窗口，检查 PE 架构、Windows GUI 子系统、资源及程序清单。x86 使用 `v141_xp` 并以 Windows XP SP3 为目标，同时保留在新系统使用新 API 的能力；x64 和 ARM64 使用 `v143`。
-
-x86 和 x64 运行策略单元测试、源代码检查及迷你窗口自身的绘制与结束状态测试。x64 还会创建一次性 MBR/GPT 虚拟磁盘，验证写入、启用只读、拒绝写入、解除只读以及恢复写入的完整过程。ARM64 通过交叉编译和静态检查进行验证。CI 成功后自动发布六个 EXE、三个 ZIP 和 SHA-256 校验文件到 GitHub Releases。
-
-虚拟磁盘测试与实际 U 盘控制器存在差异。Windows 执行器上的窗口测试检查窗口消息处理、绘制和退出行为，无法代替真实桌面上的视觉检查。
-
-## 参考文档
-
-- https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/attributes-volume
-- https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-ioctl_volume_get_gpt_attributes
-- https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_dismount_volume
-- https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createwindowexw
-- https://learn.microsoft.com/en-us/windows/win32/gdi/double-buffering
+GitHub Actions 会自动编译 Windows x86、x64、ARM64 和 Linux x86_64、aarch64，执行测试后发布各平台文件。测试包含 Windows MBR/GPT 虚拟磁盘操作、Linux 模拟块设备操作以及 Linux X11/Wayland 窗口启动。真实 USB 设备和各类桌面环境下的效果仍可能受驱动、文件系统和系统配置影响。
