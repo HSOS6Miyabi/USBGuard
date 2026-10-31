@@ -18,6 +18,8 @@ struct Volume {
     std::wstring fileSystem;
     DWORD diskNumber = MAXDWORD;
     bool readonly = false;
+    bool mountedReadOnly = false;
+    bool mountStateKnown = false;
     ULONGLONG attributes = 0;
     bool selected = true;
 };
@@ -33,6 +35,14 @@ extern std::vector<Disk> g_disks;
 extern DWORD g_executableDisk;
 extern std::set<DWORD> g_windowsDisks;
 std::wstring ErrorText(DWORD error);
+// Persistent metadata and mounted filesystem state must be evaluated independently.
+// RefreshMountedState never force-dismounts a busy volume.
+bool ReadAttributes(HANDLE handle, ULONGLONG& attributes, std::wstring& error);
+bool WriteAttributes(const std::wstring& device, ULONGLONG attributes,
+                     bool allVolumes, std::wstring& error);
+bool ReadMountedReadOnly(const std::wstring& volume, bool& readonly);
+bool RefreshMountedState(DWORD diskNumber, const std::vector<std::wstring>& volumeDevices,
+                         bool desiredReadOnly, std::wstring& detail);
 bool Discover(std::wstring& error);
 Disk* SourceDisk();
 bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progress progress = {});
