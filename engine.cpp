@@ -283,7 +283,8 @@ bool RefreshMountedState(DWORD diskNumber, const std::vector<std::wstring>& volu
     size_t unresolved = 0;
     std::wstring reasons;
     for (const auto& volume : volumeDevices) {
-        const std::wstring label = volume;
+        const std::wstring mountLabel = MountPoints(volume);
+        const std::wstring label = HasDriveLetterMount(mountLabel) ? mountLabel : volume;
         bool dismounted = false;
         DWORD lockError = ERROR_SUCCESS;
         DWORD dismountError = ERROR_SUCCESS;
