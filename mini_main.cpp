@@ -499,6 +499,10 @@ void LayoutWindow(HWND window) {
     }
 }
 void DismissMiniWindow(HWND window) {
+    if (g_ui.finished && !g_ui.succeeded) {
+        DestroyWindow(window);
+        return;
+    }
     g_ui.dismissed = true;
     g_ui.closeHovered = false;
     ShowWindow(window, SW_HIDE);
@@ -620,6 +624,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             g_ui.requestedAction != policy::Action::Status;
         if (g_ui.restoreExplorerPending) TryRestoreExplorerWindow(window);
         KillTimer(window,kAnimationTimer);
+        if (g_ui.dismissed && !g_ui.succeeded) {
+            DestroyWindow(window);
+            return 0;
+        }
         SetTimer(window,kCloseTimer,100,nullptr);
         if (!g_ui.dismissed)
             SetWindowPos(window,HWND_TOPMOST,0,0,0,0,
@@ -670,7 +678,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     }
 }
 
-int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest,bool closeTest) {
+int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest,
+                  bool closeTest,bool closeFailedTest,bool closePendingFailedTest) {
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     using DpiContextFn = BOOL (WINAPI*)(HANDLE);
     auto dpiFn = user32 ? reinterpret_cast<DpiContextFn>(
@@ -715,18 +724,32 @@ int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest,bool c
     UpdateWindow(window);
     SetTimer(window,kAnimationTimer,80,nullptr);
 
-    if (closeTest) {
+    auto clickClose = [&]() {
         const RECT bounds = CloseButtonRect();
         const LPARAM click = MAKELPARAM((bounds.left + bounds.right) / 2,
                                        (bounds.top + bounds.bottom) / 2);
         SendMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, click);
         SendMessageW(window, WM_LBUTTONUP, 0, click);
-        if (!g_ui.dismissed || IsWindowVisible(window)) {
-            DestroyWindow(window);
+    };
+    if (closeTest || closePendingFailedTest) {
+        clickClose();
+        if (!g_ui.dismissed || IsWindowVisible(window) || !IsWindow(window)) {
+            if (IsWindow(window)) DestroyWindow(window);
             return 8;
         }
     }
-    if (smokeTest) {
+    if (closeFailedTest || closePendingFailedTest) {
+        auto failure = std::make_unique<MessageData>();
+        failure->exitCode = 4;
+        failure->text = L"管理员权限请求已取消。";
+        SendMessageW(window, kFinishedMessage, 0,
+                     reinterpret_cast<LPARAM>(failure.release()));
+        if (closeFailedTest) clickClose();
+        if (IsWindow(window)) {
+            DestroyWindow(window);
+            return 8;
+        }
+    } else if (smokeTest) {
         if (ExplorerArguments(L"E:\\") != L"/n,E:\\" ||
             ExplorerArguments(L"E:\\Example Folder\\") != L"/n,\"E:\\Example Folder\"") {
             DestroyWindow(window);
@@ -756,7 +779,9 @@ int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest,bool c
     if (g_ui.fontHeading) DeleteObject(g_ui.fontHeading);
     if (g_ui.fontBody) DeleteObject(g_ui.fontBody);
     if (g_ui.fontSmall) DeleteObject(g_ui.fontSmall);
-    return static_cast<int>(msg.wParam);
+    const int exitCode = static_cast<int>(msg.wParam);
+    if ((closeFailedTest || closePendingFailedTest) && exitCode == 4) return 0;
+    return exitCode;
 }
 } // namespace
 
@@ -767,6 +792,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     policy::Action action=policy::Action::Toggle;
     bool smokeTest=false;
     bool closeTest=false;
+    bool closeFailedTest=false;
+    bool closePendingFailedTest=false;
     if (argv && argc>=2) {
         if (wcscmp(argv[1],L"--worker")==0) {
             const policy::Action workerAction=argc==4?policy::ParseAction(argv[2]):policy::Action::Invalid;
@@ -775,7 +802,11 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
             return Worker(workerAction,pipe);
         }
         closeTest = argc==2 && wcscmp(argv[1],L"--ui-close-test")==0;
-        smokeTest = closeTest || (argc==2 && wcscmp(argv[1],L"--ui-self-test")==0);
+        closeFailedTest = argc==2 && wcscmp(argv[1],L"--ui-close-failed-test")==0;
+        closePendingFailedTest = argc==2 &&
+            wcscmp(argv[1],L"--ui-close-pending-failed-test")==0;
+        smokeTest = closeTest || closeFailedTest || closePendingFailedTest ||
+            (argc==2 && wcscmp(argv[1],L"--ui-self-test")==0);
         if (!smokeTest)
             action=argc==2?policy::ParseAction(argv[1]):policy::Action::Invalid;
     }
@@ -788,7 +819,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         CloseHandle(mutex);
         return 0;
     }
-    const int code=RunMiniWindow(instance,action,smokeTest,closeTest);
+    const int code=RunMiniWindow(instance,action,smokeTest,closeTest,
+                                 closeFailedTest,closePendingFailedTest);
     ReleaseMutex(mutex);
     CloseHandle(mutex);
     return code;

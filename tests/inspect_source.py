@@ -58,6 +58,12 @@ assert 'PostMessageW(window,kFinishedMessage' in mini
 assert 'RECT CloseButtonRect()' in mini and 'g_ui.width - Scale(14)' in mini
 assert 'case WM_LBUTTONDOWN:' in mini and 'case WM_LBUTTONUP:' in mini
 assert 'if (dismiss) DismissMiniWindow(window);' in mini
+assert 'if (g_ui.finished && !g_ui.succeeded)' in mini
+assert 'if (g_ui.dismissed && !g_ui.succeeded)' in mini
+assert 'DestroyWindow(window);' in mini
+assert '--ui-close-failed-test' in mini
+assert '--ui-close-pending-failed-test' in mini
+assert 'mini_ui_relaunch_after_failure' in cmake
 assert 'ShowWindow(window, SW_HIDE)' in mini
 assert 'if (!g_ui.dismissed)' in mini
 assert 'if (g_ui.closeTest && IsWindowVisible(window)) g_ui.exitCode = 8;' in mini

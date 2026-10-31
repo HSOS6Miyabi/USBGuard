@@ -84,7 +84,11 @@ include(CTest)
 if(WIN32 AND BUILD_TESTING)
     add_test(NAME mini_ui_smoke COMMAND $<TARGET_FILE:USBGuardMini> --ui-self-test)
     add_test(NAME mini_ui_close COMMAND $<TARGET_FILE:USBGuardMini> --ui-close-test)
-    set_tests_properties(mini_ui_smoke mini_ui_close PROPERTIES TIMEOUT 20)
+    add_test(NAME mini_ui_relaunch_after_failure COMMAND ${Python3_EXECUTABLE}
+             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mini_relaunch.py
+             $<TARGET_FILE:USBGuardMini>)
+    set_tests_properties(mini_ui_smoke mini_ui_close mini_ui_relaunch_after_failure
+                         PROPERTIES TIMEOUT 20)
 endif()
 if(BUILD_TESTING)
     add_executable(policy_tests tests/policy_tests.cpp)
