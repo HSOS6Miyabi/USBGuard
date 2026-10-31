@@ -34,6 +34,13 @@ jobs:
       - name: Execute platform-neutral and source tests (x86 / x64)
         if: matrix.runnable
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Integration test MBR and GPT on disposable virtual disks
+        if: matrix.name == 'x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./tests/test_vhd.ps1 -Executable ./build/Release/storage_integration.exe -Style MBR
+          & ./tests/test_vhd.ps1 -Executable ./build/Release/storage_integration.exe -Style GPT
       - name: Run source checks on host (ARM64 cross-build)
         if: ${{ !matrix.runnable }}
         run: python tests/inspect_source.py
