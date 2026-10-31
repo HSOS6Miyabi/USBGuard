@@ -1,5 +1,8 @@
 from pathlib import Path
 import struct
+import subprocess
+import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 root = Path(__file__).resolve().parents[1]
@@ -22,6 +25,11 @@ assert 'DeleteFileW(shortcutPath.c_str())' in toast
 assert 'USBGuard.Session.' in toast and 'CoCreateGuid' in toast
 assert 'UpdateWithTag' in toast and 'progressValue' in toast
 assert 'RegCreateKey' not in toast and 'RegSetValue' not in toast
+assert 'L"USB Guard 需要管理员权限"' in toast
+assert '请在 Windows 用户账户控制对话框中点击“是”' in toast
+assert toast.index('toast.Show(L"USB Guard 需要管理员权限"') < toast.index('auto result = LaunchWorker(')
+assert 'Sleep(' not in toast
+assert '<actions>' not in toast
 assert 'ShellExecuteExW' in toast and 'GetNamedPipeClientProcessId' in toast
 assert 'WaitForSingleObject(launch.hProcess' in toast
 assert 'USBGuardToast' in cmake and 'USBGuardUI' in cmake
@@ -31,12 +39,20 @@ for name, level in [('app.manifest', 'requireAdministrator'), ('toast.manifest',
     actual = [e.attrib['level'] for e in parsed.iter() if e.tag.endswith('requestedExecutionLevel')]
     assert actual == [level], (name, actual)
 
-ico = (root / 'assets' / 'usb-guard.ico').read_bytes()
+with tempfile.TemporaryDirectory() as temp_dir:
+    generated_icon = Path(temp_dir) / "usb-guard.ico"
+    subprocess.run([sys.executable, str(root / 'assets' / 'generate_icon.py'),
+                    str(generated_icon)], check=True, capture_output=True, text=True)
+    ico = generated_icon.read_bytes()
+    if len(sys.argv) > 1:
+        built_icon = Path(sys.argv[1]).read_bytes()
+        assert built_icon == ico, 'The embedded icon input differs from the icon generator output'
+assert b'\\x89PNG\\r\\n\\x1a\\n' in ico
 reserved, kind, count = struct.unpack_from('<HHH', ico, 0)
 assert reserved == 0 and kind == 1 and count >= 4
 sizes = set()
 for i in range(count):
     width, height = struct.unpack_from('<BB', ico, 6 + i * 16)
     sizes.add((width or 256, height or 256))
-assert {(16, 16), (32, 32), (48, 48), (256, 256)} <= sizes
+assert {(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)} <= sizes
 print('Source, manifest and icon checks passed')
