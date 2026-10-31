@@ -27,7 +27,16 @@ add_executable(USBGuardMini WIN32 mini_main.cpp ${COMMON_SOURCES} "${ICON_OUTPUT
 foreach(target IN ITEMS USBGuardUI USBGuardMini)
     target_compile_features(${target} PRIVATE cxx_std_17)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_compile_definitions(${target} PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0601 WINVER=0x0601)
+    if(MSVC AND CMAKE_GENERATOR_PLATFORM STREQUAL "Win32")
+        # The same x86 EXEs run on XP SP3 and modern Windows. Modern APIs
+        # are resolved dynamically and used when present.
+        target_compile_definitions(${target} PRIVATE UNICODE _UNICODE
+            WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0501 WINVER=0x0501)
+        target_link_options(${target} PRIVATE "/SUBSYSTEM:WINDOWS,5.01")
+    else()
+        target_compile_definitions(${target} PRIVATE UNICODE _UNICODE
+            WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0601 WINVER=0x0601)
+    endif()
     target_link_libraries(${target} PRIVATE comctl32 shell32 ole32 propsys advapi32)
     if(MSVC)
         set_property(TARGET ${target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -39,7 +48,7 @@ foreach(target IN ITEMS USBGuardUI USBGuardMini)
 endforeach()
 # Integration executable is never packaged in Release. It is the only build that
 # can inspect file-backed virtual disks. Production applications only accept USB.
-if(BUILD_TESTING)
+if(BUILD_TESTING AND NOT (MSVC AND CMAKE_GENERATOR_PLATFORM STREQUAL "Win32"))
     add_executable(storage_integration tests/storage_integration.cpp engine.cpp engine.hpp policy.hpp)
     target_compile_features(storage_integration PRIVATE cxx_std_17)
     target_include_directories(storage_integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
