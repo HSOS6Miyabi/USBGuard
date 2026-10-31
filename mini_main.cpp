@@ -45,9 +45,12 @@ bool VerifyNamedPipePeer(HANDLE pipe, HANDLE worker) {
     auto getClientPid = kernel ? reinterpret_cast<ClientPidFn>(
         GetProcAddress(kernel, "GetNamedPipeClientProcessId")) : nullptr;
     if (getClientPid) {
+        using GetProcessIdFn = DWORD (WINAPI*)(HANDLE);
+        auto getProcessId = kernel ? reinterpret_cast<GetProcessIdFn>(
+            GetProcAddress(kernel, "GetProcessId")) : nullptr;
         ULONG clientPid = 0;
-        return getClientPid(pipe, &clientPid) &&
-               clientPid == GetProcessId(worker);
+        return getProcessId && getClientPid(pipe, &clientPid) &&
+               clientPid == getProcessId(worker);
     }
     // XP has no GetNamedPipeClientProcessId. The pipe name includes a unique
     // 128-bit GUID, and it is generated immediately before starting the worker.
