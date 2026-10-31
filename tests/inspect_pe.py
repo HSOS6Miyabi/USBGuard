@@ -168,7 +168,7 @@ def inspect(path: Path, expected_machine: int) -> set[str]:
         path.name, '1.1.0',
     )
     for value in expected_strings:
-        assert value.encode('utf-16le') + b'\\x00\\x00' in version_blob, (
+        assert value.encode('utf-16le') + b'\x00\x00' in version_blob, (
             f'{path}: VERSIONINFO is missing {value!r}'
         )
 
