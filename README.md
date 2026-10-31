@@ -26,7 +26,7 @@
 通知版采用同一 EXE 的短暂双进程架构：
 
 1. 普通权限进程负责通知并创建会话内临时命名管道，不显示应用主窗口。
-2. 通过系统 `runas` 请求 UAC 管理员权限，启动同一 EXE 的工作进程；工作进程仅负责磁盘操作和进度报告。
+2. 先显示“需要管理员权限”的通知，提示用户在 Windows 用户账户控制对话框中点击“是”，随即通过系统 `runas` 请求 UAC 权限并启动工作进程。无需点击通知中的按钮，也不会增加人为等待时间。工作进程只负责磁盘操作和进度报告。
 3. Windows 10 1703 及更新版本使用系统 Toast 实时进度条；Windows 8/8.1 使用普通 Toast 状态通知。Windows 7 以及无法使用 Toast 的系统使用 `Shell_NotifyIconW` 通知气球报告进度百分比。
 4. 管理员进程在操作结束后退出，普通进程发布结果通知、删除本次运行创建的通知身份和临时通知图标，然后立即退出，不保留后台服务或进程。
 
@@ -61,7 +61,7 @@ start /wait "" "E:\\USBGuardToast.exe" --toggle
 
 ## Windows 构建
 
-需要 Visual Studio 2022（包含 MSVC、Windows 10/11 SDK、C++ 桌面开发工具）和 CMake 3.21+，无需 NuGet、Qt、.NET 或 Windows App SDK。
+需要 Visual Studio 2022（包含 MSVC、Windows 10/11 SDK、C++ 桌面开发工具）、CMake 3.21+ 以及 Python 3（仅用于编译期间生成多尺寸图标，使用 Python 标准库）。运行生成的 EXE 无需安装 Python、NuGet、Qt、.NET 或 Windows App SDK。
 
 ```bat
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -69,7 +69,7 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-也可以双击 `BUILD_WINDOWS.cmd`，脚本会进行 Release 构建、运行测试，并将两个 EXE 复制到 `dist` 目录。产物分别是 `build\Release\USBGuardUI.exe` 和 `build\Release\USBGuardToast.exe`。清单和多尺寸 EXE 图标已嵌入两个程序，可以分别独立拷贝到 U 盘。`USBGuardToast.exe` 使用运行时加载的 Windows Runtime 接口发布 Toast；Windows 7 可进入 `Shell_NotifyIconW` 兼容流程，无需 Windows App SDK。
+也可以双击 `BUILD_WINDOWS.cmd`，脚本会进行 Release 构建、运行测试，并将两个 EXE 复制到 `dist` 目录。产物分别是 `build\Release\USBGuardUI.exe` 和 `build\Release\USBGuardToast.exe`。两种清单和由 `assets/generate_icon.py` 生成的 16～256 像素 EXE 图标都直接嵌入两个程序，可以分别独立拷贝到 U 盘。`USBGuardToast.exe` 使用运行时加载的 Windows Runtime 接口发布 Toast；Windows 7 可进入 `Shell_NotifyIconW` 兼容流程，无需 Windows App SDK。
 
 Windows 7/8 应在真实设备上测试。通知 API 兼容性并不意味着该操作系统已经获得所有安全更新。
 
