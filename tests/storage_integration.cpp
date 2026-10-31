@@ -31,6 +31,25 @@ bool ProbeWrite(const std::wstring& path) {
     DeleteFileW(path.c_str());
     return ok && equal;
 }
+bool RejectWriteWhileProtected(const std::wstring& path) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+                              CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+        const char payload[] = "This must not be written.";
+        DWORD count = 0;
+        const BOOL wrote = WriteFile(file, payload, sizeof(payload), &count, nullptr);
+        const DWORD writeError = wrote ? ERROR_SUCCESS : GetLastError();
+        CloseHandle(file);
+        DeleteFileW(path.c_str());
+        std::wcerr << L"Protected volume unexpectedly allowed file creation. WriteFile="
+                   << wrote << L" writeError=" << writeError << std::endl;
+        return false;
+    }
+    const DWORD error = GetLastError();
+    std::wcout << L"Protected CreateFile rejected with Win32 error " << error << std::endl;
+    return error == ERROR_ACCESS_DENIED || error == ERROR_WRITE_PROTECT;
+}
 void Trace(const wchar_t* description, const std::wstring& detail) {
     std::wcout << description << L": " << detail << std::endl;
 }
@@ -49,7 +68,9 @@ int wmain(int argc, wchar_t** argv) {
         !((argv[2][0] >= L'A' && argv[2][0] <= L'Z') ||
           (argv[2][0] >= L'a' && argv[2][0] <= L'z'))) return 2;
     const std::wstring root = std::wstring(1, argv[2][0]) + L":\\";
-    const std::wstring probe = root + L"usbguard-disposable-probe.tmp";
+    const std::wstring initialPath = root + L"usbguard-initial.tmp";
+    const std::wstring blockedPath = root + L"usbguard-protected.tmp";
+    const std::wstring restoredPath = root + L"usbguard-restored.tmp";
     const PARTITION_STYLE style = _wcsicmp(argv[3], L"GPT") == 0
         ? PARTITION_STYLE_GPT : PARTITION_STYLE_MBR;
 
@@ -102,7 +123,7 @@ int wmain(int argc, wchar_t** argv) {
         Trace(L"Initial writable state could not be established", initial);
         return 6;
     }
-    if (!ProbeWrite(probe)) {
+    if (!ProbeWrite(initialPath)) {
         std::wcerr << L"Initial write and reopen verification failed\n";
         return 7;
     }
@@ -113,16 +134,16 @@ int wmain(int argc, wchar_t** argv) {
     bool statusKnown = false;
     for (const auto& volume : target->volumes) if (volume.selected)
         statusKnown = usb::ReadMountedReadOnly(volume.devicePath, actualReadOnly);
-    const bool acceptedUnexpectedWrite = ProbeWrite(probe);
+    const bool correctlyBlocked = RejectWriteWhileProtected(blockedPath);
     std::wstring restoredResult;
     bool restoredOk = usb::ChangeDisk(*target, policy::Action::Unprotect, restoredResult);
     Trace(L"Unprotect", restoredResult);
-    bool writableAgain = restoredOk && ProbeWrite(probe);
+    bool writableAgain = restoredOk && ProbeWrite(restoredPath);
     if (!protectedOk || !statusKnown || !actualReadOnly ||
-        acceptedUnexpectedWrite || !writableAgain) {
+        !correctlyBlocked || !writableAgain) {
         std::wcerr << L"Read-only enforcement failed. protect=" << protectedOk
                    << L" mounted=" << statusKnown << L" readonly=" << actualReadOnly
-                   << L" wroteWhileProtected=" << acceptedUnexpectedWrite
+                   << L" blockedWrite=" << correctlyBlocked
                    << L" unprotect=" << restoredOk << L" writableAgain=" << writableAgain << std::endl;
         return 8;
     }
