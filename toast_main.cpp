@@ -113,7 +113,7 @@ struct TemporaryNotificationIdentity {
                 (c >= L'a' && c <= L'f')) token += c;
         }
         if (token.size() != 32) return false;
-        appId = L"USBGuard.Session." + token;
+        appId = L"PortableUSBGuard.Notifications";
         PWSTR folder = nullptr;
         if (FAILED(SHGetKnownFolderPath(FOLDERID_Programs, 0, nullptr, &folder))) return false;
         shortcutPath = folder;
@@ -148,47 +148,63 @@ struct NativeToast {
     TemporaryNotificationIdentity identity;
     Rt runtime;
     ComPtr<N::IToastNotifier> notifier;
+    ComPtr<N::IToastNotificationHistory2> history;
     bool available = false;
-    bool progressCapable = false;
+    bool progressStarted = false;
     unsigned sequence = 1;
 
     bool Setup(DWORD build) {
-        if (build < 602 || !runtime.Load()) return false;
-        if (!identity.Create()) return false;
+        // NotificationData / Toast progress needs Windows 10 version 1703.
+        if (build < 15063 || !runtime.Load() || !identity.Create()) return false;
         HStr className(runtime, RuntimeClass_Windows_UI_Notifications_ToastNotificationManager);
         HStr appId(runtime, identity.appId);
         ComPtr<N::IToastNotificationManagerStatics> manager;
         if (FAILED(runtime.factory(className.raw, IID_PPV_ARGS(&manager))) ||
             FAILED(manager->CreateToastNotifierWithId(appId.raw, &notifier))) return false;
+        // Stable AppUserModelID lets us remove earlier USBGuard notifications.
+        ComPtr<N::IToastNotificationManagerStatics2> manager2;
+        ComPtr<N::IToastNotificationHistory> baseHistory;
+        if (SUCCEEDED(manager.As(&manager2)) && manager2 &&
+            SUCCEEDED(manager2->get_History(&baseHistory)) && baseHistory)
+            baseHistory.As(&history);
+        if (history) history->ClearWithId(appId.raw);
         available = true;
-        progressCapable = build >= 15063;
         return true;
     }
-    bool CreateData(double fraction, const std::wstring& stage, ComPtr<N::INotificationData>& output) {
+
+    bool CreateData(double fraction, const std::wstring& heading,
+                    const std::wstring& details, const std::wstring& status,
+                    ComPtr<N::INotificationData>& output) {
         HStr name(runtime, RuntimeClass_Windows_UI_Notifications_NotificationData);
         ComPtr<IInspectable> instance;
-        if (FAILED(runtime.activate(name.raw, instance.GetAddressOf())) || FAILED(instance.As(&output))) return false;
+        if (FAILED(runtime.activate(name.raw, instance.GetAddressOf())) ||
+            FAILED(instance.As(&output))) return false;
         ComPtr<Map> values;
         if (FAILED(output->get_Values(&values))) return false;
-        HStr keyValue(runtime, L"progressValue"), value(runtime, std::to_wstring(fraction));
-        HStr keyStatus(runtime, L"progressStatus"), status(runtime, stage);
-        boolean replaced = false;
-        if (FAILED(values->Insert(keyValue.raw, value.raw, &replaced)) ||
-            FAILED(values->Insert(keyStatus.raw, status.raw, &replaced))) return false;
+        const std::pair<const wchar_t*, std::wstring> parts[] = {
+            {L"heading", heading},
+            {L"details", details},
+            {L"progressValue", std::to_wstring((std::max)(0.0, (std::min)(fraction, 1.0)))},
+            {L"progressStatus", status}
+        };
+        for (const auto& item : parts) {
+            HStr key(runtime, item.first), value(runtime, item.second);
+            boolean replaced = false;
+            if (FAILED(values->Insert(key.raw, value.raw, &replaced))) return false;
+        }
         return SUCCEEDED(output->put_SequenceNumber(sequence++));
     }
+
     bool Show(const std::wstring& title, const std::wstring& details, bool showProgress) {
         if (!available) return false;
-        std::wstring xml;
-        if (progressCapable) {
-            xml = L"<toast duration='short' launch='--notification-open'><visual><binding template='ToastGeneric'>"
-                  L"<text>" + XmlEscape(title) + L"</text><text>" + XmlEscape(details) + L"</text>";
-            if (showProgress) xml += L"<progress title='U 盘写保护操作' value='{progressValue}' status='{progressStatus}'/>";
-            xml += L"</binding></visual></toast>";
+        std::wstring xml = L"<toast duration='long' launch='--notification-open'><visual><binding template='ToastGeneric'>";
+        if (showProgress) {
+            xml += L"<text>{heading}</text><text>{details}</text>"
+                   L"<progress title='U 盘写保护操作' value='{progressValue}' status='{progressStatus}'/>";
         } else {
-            xml = L"<toast launch='--notification-open'><visual><binding template='ToastText02'><text id='1'>" + XmlEscape(title) +
-                  L"</text><text id='2'>" + XmlEscape(details) + L"</text></binding></visual></toast>";
+            xml += L"<text>" + XmlEscape(title) + L"</text><text>" + XmlEscape(details) + L"</text>";
         }
+        xml += L"</binding></visual></toast>";
         HStr xmlClass(runtime, RuntimeClass_Windows_Data_Xml_Dom_XmlDocument), xmlText(runtime, xml);
         ComPtr<IInspectable> instance;
         if (FAILED(runtime.activate(xmlClass.raw, instance.GetAddressOf()))) return false;
@@ -199,30 +215,46 @@ struct NativeToast {
         HStr toastClass(runtime, RuntimeClass_Windows_UI_Notifications_ToastNotification);
         ComPtr<N::IToastNotificationFactory> factory;
         if (FAILED(runtime.factory(toastClass.raw, IID_PPV_ARGS(&factory)))) return false;
-        ComPtr<N::IToastNotification> toast;
-        if (FAILED(factory->CreateToastNotification(doc.Get(), &toast))) return false;
-        if (progressCapable) {
-            ComPtr<N::IToastNotification2> tagged;
-            HStr tag(runtime, NOTIFICATION_TAG);
-            if (FAILED(toast.As(&tagged)) || FAILED(tagged->put_Tag(tag.raw))) return false;
-            if (showProgress) {
-                ComPtr<N::IToastNotification4> dataToast;
-                ComPtr<N::INotificationData> data;
-                if (FAILED(toast.As(&dataToast)) || !CreateData(0, L"开始处理……", data) ||
-                    FAILED(dataToast->put_Data(data.Get()))) return false;
-            }
+        ComPtr<N::IToastNotification> item;
+        if (FAILED(factory->CreateToastNotification(doc.Get(), &item))) return false;
+        ComPtr<N::IToastNotification2> tagged;
+        HStr tag(runtime, NOTIFICATION_TAG);
+        if (FAILED(item.As(&tagged)) || FAILED(tagged->put_Tag(tag.raw))) return false;
+        if (showProgress) {
+            ComPtr<N::IToastNotification4> dataToast;
+            ComPtr<N::INotificationData> data;
+            if (FAILED(item.As(&dataToast)) ||
+                !CreateData(0.0, title, details, L"等待管理员授权", data) ||
+                FAILED(dataToast->put_Data(data.Get()))) return false;
         }
-        return SUCCEEDED(notifier->Show(toast.Get()));
+        const bool shown = SUCCEEDED(notifier->Show(item.Get()));
+        if (shown && showProgress) progressStarted = true;
+        return shown;
     }
+
     bool Update(size_t done, size_t total, const std::wstring& stage) {
-        if (!available || !progressCapable) return false;
+        if (!available || !progressStarted) return false;
         ComPtr<N::IToastNotifier2> updater;
         if (FAILED(notifier.As(&updater))) return false;
         ComPtr<N::INotificationData> data;
-        if (!CreateData(total ? static_cast<double>(done) / total : 0, stage, data)) return false;
+        if (!CreateData(total ? static_cast<double>(done) / total : 0.0,
+                        L"USB Guard 正在处理", stage, stage, data)) return false;
         HStr tag(runtime, NOTIFICATION_TAG);
         N::NotificationUpdateResult result{};
-        return SUCCEEDED(updater->UpdateWithTag(data.Get(), tag.raw, &result));
+        return SUCCEEDED(updater->UpdateWithTag(data.Get(), tag.raw, &result)) &&
+               static_cast<int>(result) == 0; // Succeeded, not NotificationNotFound.
+    }
+
+    bool Finish(const std::wstring& title, const std::wstring& details) {
+        if (!available) return false;
+        // Remove the progress item; do not leave a stale progress card in history.
+        if (history) {
+            HStr appId(runtime, identity.appId), tag(runtime, NOTIFICATION_TAG);
+            history->RemoveGroupedTagWithId(tag.raw, nullptr, appId.raw);
+        }
+        progressStarted = false;
+        // Same tag and app identity: a single completion entry remains in history.
+        return Show(title, details, false);
     }
 };
 
@@ -426,38 +458,27 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     } com;
     const DWORD build = WindowsBuild();
     NativeToast toast;
-    bool modern = toast.Setup(build);
-    // Send both native Toast and Shell notification-area messages. On systems
-    // where temporary desktop Toast identity registration is not yet visible
-    // to the notification service, the Shell notification is the fallback.
+    const bool modern = toast.Setup(build);
     Balloon balloon;
-    balloon.Start();
-    // Publish the consent instruction before Windows displays its own UAC dialog.
-    // The notification is informational: UAC is the only confirmation required.
+    // Shell balloons are exclusively for Windows releases without WinRT progress.
+    if (!modern && build < 15063) balloon.Start();
     const std::wstring consent = L"请在 Windows 用户账户控制对话框中点击“是”，允许修改 U 盘写保护设置。";
-    if (modern && !toast.Show(L"USB Guard 需要管理员权限", consent, false))
-        modern = false;
-    balloon.Tell(L"USB Guard 需要管理员权限", consent);
-    bool progressStarted = false;
-    // ShellExecuteExW runs immediately from LaunchWorker, without a waiting period.
+    if (modern) {
+        toast.Show(L"USB Guard 需要管理员权限", consent, true);
+    } else if (build < 15063) {
+        balloon.Tell(L"USB Guard 需要管理员权限", consent);
+    }
+    // UAC is the sole confirmation; no additional dialog or artificial delay.
     auto result = LaunchWorker(action, [&](size_t done, size_t total, const std::wstring& stage) {
-        if (modern) {
-            if (!progressStarted)
-                progressStarted = toast.Show(L"USB Guard 正在处理", stage, true);
-            if (progressStarted && !toast.Update(done, total, stage))
-                progressStarted = false;
-        }
-        if (total) {
-            const unsigned pct = static_cast<unsigned>(100 * done / total);
-            balloon.Tell(L"USB Guard 正在处理", std::to_wstring(pct) + L"% · " + stage);
-        }
+        if (modern) toast.Update(done, total, stage);
     });
     const bool success = result.exitCode == 0;
     const std::wstring title = success ? L"USB Guard 操作完成" : L"USB Guard 操作失败";
-    if (modern) toast.Show(title, result.message, false);
-    // The completion event is sent to the Shell separately, even if the WinRT
-    // API reported success: Show() does not guarantee visible presentation.
-    balloon.Tell(title, result.message, !success);
+    if (modern) {
+        toast.Finish(title, result.message);
+    } else if (build < 15063) {
+        balloon.Tell(title, result.message, !success);
+    }
     usb::WriteConsoleLine(result.message);
     return result.exitCode;
 }
