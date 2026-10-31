@@ -45,6 +45,15 @@ assert 'HasDriveLetterMount' in engine and 'IsEligiblePartition' in engine
 assert 'IsBasicDataPartition' not in engine
 assert 'if (!HasDriveLetterMount(v.mountPoints)) continue' in engine
 assert 'If selected volumes differ, Toggle protects all' in engine
+assert '正在刷新物理磁盘属性' in engine
+assert '正在请求卷独占访问' in engine
+assert '正在强制卸载卷' in engine
+assert '正在重新挂载卷' in engine
+assert '正在验证卷只读状态' in engine
+assert '正在复查卷持久属性' in engine
+assert 'const size_t total = 1 + volumeDevices.size() * 4' in engine
+assert 'RefreshMountedState(disk.number, devices, desired, refreshed,' in engine
+assert 'PostUpdate(window,done,total,stage)' in mini
 assert '"Win32"' in cmake and '/SUBSYSTEM:WINDOWS,5.01' in cmake
 assert 'DestroyWindow(window)' in mini
 assert '--ui-self-test' in mini and 'mini_ui_smoke' in cmake
