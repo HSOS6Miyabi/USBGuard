@@ -195,6 +195,15 @@ void OnRefresh(GtkButton*,gpointer) {
     gtk_widget_set_sensitive(ui.device,!ui.disks.empty());
     for(auto* btn:ui.actionButtons)if(btn)gtk_widget_set_sensitive(btn,!ui.disks.empty());
 }
+gboolean OnDelete(GtkWidget*,GdkEvent*,gpointer) {
+    // The privileged worker must be allowed to finish before the GUI exits.
+    if(ui.working) {
+        gtk_label_set_text(GTK_LABEL(ui.detail),
+                           "设备操作正在执行，请等待卷状态检查结束。");
+        return TRUE;
+    }
+    return FALSE;
+}
 void OnDestroy(GtkWidget*,gpointer){gtk_main_quit();}
 void LoadStyles() {
     const char* css=R"css(
@@ -229,6 +238,7 @@ void BuildUI() {
     gtk_window_set_resizable(GTK_WINDOW(ui.window),FALSE);
     gtk_container_set_border_width(GTK_CONTAINER(ui.window),0);
     gtk_window_set_position(GTK_WINDOW(ui.window),GTK_WIN_POS_CENTER);
+    g_signal_connect(ui.window,"delete-event",G_CALLBACK(OnDelete),nullptr);
     g_signal_connect(ui.window,"destroy",G_CALLBACK(OnDestroy),nullptr);
     GtkWidget* outer=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);
     gtk_container_add(GTK_CONTAINER(ui.window),outer);
