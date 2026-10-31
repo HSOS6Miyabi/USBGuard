@@ -113,10 +113,54 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  linux:
+    name: Linux build and test (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: x86_64, runner: ubuntu-22.04 }
+          - { name: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK3 and virtual display build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev xvfb xauth pkg-config
+      - name: Configure Linux CLI and Wayland/X11 GUI
+        run: cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DUSBGUARD_LINUX_GUI=ON
+      - name: Build Linux executables
+        run: cmake --build build-linux --parallel 3
+      - name: Run Linux unit tests, CLI checks, and Xvfb GUI smoke test
+        run: ctest --test-dir build-linux --output-on-failure
+      - name: Verify Linux GUI and CLI are built
+        run: |
+          test -x build-linux/linux/USBGuardLinux
+          test -x build-linux/linux/USBGuardLinuxCLI
+          build-linux/linux/USBGuardLinuxCLI --help
+      - name: Package Linux portable artifacts
+        shell: bash
+        run: |
+          mkdir -p dist/USBGuard-Linux-${{ matrix.name }}
+          install -m 755 build-linux/linux/USBGuardLinux dist/USBGuard-Linux-${{ matrix.name }}/USBGuardLinux
+          install -m 755 build-linux/linux/USBGuardLinuxCLI dist/USBGuard-Linux-${{ matrix.name }}/USBGuardLinuxCLI
+          cp linux/README.md dist/USBGuard-Linux-${{ matrix.name }}/README.md
+          tar -C dist -czf dist/USBGuard-Linux-${{ matrix.name }}.tar.gz USBGuard-Linux-${{ matrix.name }}
+          cp build-linux/linux/USBGuardLinux dist/USBGuardLinux-${{ matrix.name }}
+          cp build-linux/linux/USBGuardLinuxCLI dist/USBGuardLinuxCLI-${{ matrix.name }}
+          rm -rf dist/USBGuard-Linux-${{ matrix.name }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: USBGuard-Linux-${{ matrix.name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
   release:
     name: Publish verified binaries
     if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
-    needs: build
+    needs: [build, linux]
     runs-on: windows-2022
     permissions:
       contents: write
@@ -134,8 +178,27 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $tag = $env:GITHUB_REF_NAME }
           else { $tag = "v1.1.$env:GITHUB_RUN_NUMBER" }
           "tag=$tag" >> $env:GITHUB_OUTPUT
-          $files = Get-ChildItem release-assets -File | Where-Object { $_.Extension -in '.exe', '.zip' } | Sort-Object Name
-          if ($files.Count -ne 9) { throw "Expected 6 EXEs and 3 archives; found $($files.Count)." }
+          $files = @(Get-ChildItem release-assets -File | Where-Object {
+            $_.Extension -in '.exe', '.zip', '.gz' -or $_.Name -match '^USBGuardLinux(CLI)?-(x86_64|aarch64)
+          $hashes = foreach ($f in $files) {
+            $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($f.Name)"
+          }
+          $hashes | Set-Content -Encoding ascii release-assets/SHA256SUMS.txt
+          python -c "from pathlib import Path; p=Path('release-assets'); assert len(list(p.glob('*.exe')))==6 and len(list(p.glob('*.zip')))==3 and len(list(p.glob('*.tar.gz')))==2 and len(list(p.glob('USBGuardLinux*')))==4"
+      - name: Publish GitHub Release after successful tests
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ steps.info.outputs.tag }}'
+          $notes = "Windows (x86, x64, ARM64) and Linux (x86_64, aarch64) builds. Linux uses GTK3 on Wayland/X11 and includes a command-line tool. Linux read-only control applies only while the USB device remains connected; it does not persist through unplug/replug. SHA-256 checksums included."
+          $publish = @($files | ForEach-Object { $_.FullName }) + @((Resolve-Path release-assets/SHA256SUMS.txt).Path)
+          gh release create "$tag" $publish --repo "$env:GITHUB_REPOSITORY" --title "USBGuard $tag" --notes "$notes" --verify-tag=false
+
+          } | Sort-Object Name)
+          if ($files.Count -ne 15) { throw "Expected 9 Windows and 6 Linux files; found $($files.Count)." }
           $hashes = foreach ($f in $files) {
             $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($f.Name)"
