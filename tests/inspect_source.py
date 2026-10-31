@@ -33,6 +33,8 @@ assert 'toast.Finish(title, result.message)' in toast
 assert toast.count('balloon.Tell(') == 2
 assert toast.count('toast.Show(L"USB Guard 需要管理员权限"') == 1
 assert 'NativeToast' in toast and 'progressStarted' in toast
+assert 'CreateMutexW(' in toast and 'USBGuardToast.SingleOperation' in toast
+assert 'ERROR_ALREADY_EXISTS' in toast and 'ReleaseMutex(' in toast
 assert 'UpdateWithTag' in toast and 'progressValue' in toast
 assert 'RegCreateKey' not in toast and 'RegSetValue' not in toast
 assert 'L"USB Guard 需要管理员权限"' in toast
