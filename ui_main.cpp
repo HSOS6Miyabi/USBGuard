@@ -104,7 +104,7 @@ void DoAction(policy::Action action) {
         }
     }
     std::wstring question = L"确认要操作以下 USB 磁盘吗？\n\n" + usb::DiskLabel(*disk) +
-          L"\n\n此操作会修改磁盘上持久保存的只读属性。请先保存所有文件。";
+          L"\n\n此操作将强制卸载目标卷并刷新文件系统。请先保存所有文件并关闭占用该 U 盘的程序，未保存的数据可能丢失。";
     if (MessageBoxW(window, question.c_str(), L"确认目标磁盘", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) return;
     const DWORD number = disk->number;
     SetBusy(true);
