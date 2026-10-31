@@ -24,7 +24,8 @@ assert 'FOLDERID_Programs' in toast and 'PKEY_AppUserModel_ID' in toast
 assert 'DeleteFileW(shortcutPath.c_str())' in toast
 assert 'PortableUSBGuard.Notifications' in toast and 'CoCreateGuid' in toast
 assert 'ClearWithId(appId.raw)' in toast
-assert 'RemoveGroupedTagWithId' in toast
+assert 'history->Remove(tag.raw)' in toast
+assert toast.count('history->Remove(tag.raw)') == 2
 assert 'UpdateWithTag' in toast and 'NotificationNotFound' in toast
 assert 'if (!modern && build < 15063) balloon.Start();' in toast
 assert 'balloon.Tell(L"USB Guard 正在处理"' not in toast
