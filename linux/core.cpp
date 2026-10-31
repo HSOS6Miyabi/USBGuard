@@ -4,6 +4,7 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/sysmacros.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cerrno>
@@ -181,7 +182,6 @@ std::vector<Disk> Discover() {
             for (const auto& mounted : mounts) {
                 if (mounted.major != static_cast<unsigned>(major(st.st_rdev)) ||
                     mounted.minor != static_cast<unsigned>(minor(st.st_rdev))) continue;
-                if (mounted.bindMount) continue;
                 if (mounted.filesystem == "swap" || mounted.filesystem == "overlay") continue;
                 const std::string source = Canonical(mounted.source);
                 // Detect false matches such as overlay/bind mounts of other sources.
