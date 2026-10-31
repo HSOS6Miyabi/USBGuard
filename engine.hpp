@@ -3,7 +3,6 @@
 #define NOMINMAX
 #include <windows.h>
 #include <winioctl.h>
-#include <ntddvol.h>
 #include <functional>
 #include <set>
 #include <string>
