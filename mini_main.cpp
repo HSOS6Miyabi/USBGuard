@@ -6,7 +6,7 @@
 // Windows 7.1A SDK headers predate the current C++ parser. These stable
 // Ole32 exports exist on XP and need no COM interface declarations.
 extern "C" __declspec(dllimport) HRESULT WINAPI CoCreateGuid(GUID*);
-extern "C" __declspec(dllimport) int WINAPI StringFromGUID2(REFGUID, LPOLESTR, int);
+extern "C" __declspec(dllimport) int WINAPI StringFromGUID2(REFGUID, LPWSTR, int);
 extern "C" __declspec(dllimport) HRESULT WINAPI CoInitializeEx(LPVOID, DWORD);
 extern "C" __declspec(dllimport) void WINAPI CoUninitialize();
 #ifndef COINIT_APARTMENTTHREADED
