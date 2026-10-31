@@ -153,6 +153,11 @@ bool IsUsbDisk(const std::string& path) {
     const std::string name = path.substr(5);
     const std::string sys = "/sys/class/block/" + name;
     if (!fs::exists(sys) || fs::exists(sys + "/partition")) return false;
+    struct stat st{};
+    if (stat(path.c_str(),&st) != 0 || !S_ISBLK(st.st_mode)) return false;
+    const std::string sysDev = FirstLine(sys + "/dev");
+    if (sysDev != std::to_string(major(st.st_rdev)) + ":" +
+                  std::to_string(minor(st.st_rdev))) return false;
     return IsUsbPath(Canonical(sys + "/device"));
 }
 std::vector<Disk> Discover() {
@@ -250,7 +255,16 @@ bool KernelBackend::MountedReadOnly(const Volume& volume) {
 }
 bool KernelBackend::BlockReadOnly(const std::string& device) {
     const int fd = open(device.c_str(),O_RDONLY|O_CLOEXEC|O_NONBLOCK);
-    if (fd < 0) throw std::runtime_error(Error("无法打开 " + device));
+    if (fd < 0) {
+        // The sysfs read-only attribute can be inspected without disk-group
+        // membership on distributions that restrict /dev/sdX to root.
+        if ((errno == EACCES || errno == EPERM) && IsSafeDeviceArgument(device)) {
+            const std::string entry = "/sys/class/block/" + device.substr(5) + "/ro";
+            const std::string value = FirstLine(entry);
+            if (value == "0" || value == "1") return value == "1";
+        }
+        throw std::runtime_error(Error("无法打开 " + device));
+    }
     int ro = -1;
     const int result = ioctl(fd,BLKROGET,&ro);
     const int error = errno;
