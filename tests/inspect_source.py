@@ -97,7 +97,7 @@ assert '正在重新挂载卷' in engine
 assert '正在验证卷只读状态' in engine
 assert '正在复查卷持久属性' in engine
 assert 'const size_t total = 1 + volumeDevices.size() * 4' in engine
-assert 'RefreshMountedState(disk.number, devices, desired, refreshed,' in engine
+assert 'RefreshMountedState(disk, physical.get(), devices, desired, refreshed,' in engine
 assert 'PostUpdate(window,done,total,stage)' in mini
 assert '"Win32"' in cmake and '/SUBSYSTEM:WINDOWS,5.01' in cmake
 assert 'DestroyWindow(window)' in mini
