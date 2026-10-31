@@ -137,7 +137,7 @@ bool DiskProperties(DWORD number, PARTITION_STYLE& style, ULONGLONG& size) {
                          layoutBuffer.data(), static_cast<DWORD>(layoutBuffer.size()),
                          &returned, nullptr) || returned < offsetof(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry)) return false;
     auto* layout = reinterpret_cast<DRIVE_LAYOUT_INFORMATION_EX*>(layoutBuffer.data());
-    style = layout->PartitionStyle;
+    style = static_cast<PARTITION_STYLE>(layout->PartitionStyle);
     if (style != PARTITION_STYLE_MBR && style != PARTITION_STYLE_GPT) return false;
 
     GET_LENGTH_INFORMATION length{};
