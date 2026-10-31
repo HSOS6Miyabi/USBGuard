@@ -277,6 +277,17 @@ std::wstring ExecutableDirectory() {
     return full.substr(0, slash + 1);
 }
 
+std::wstring ExplorerArguments(std::wstring directory) {
+    // A trailing backslash immediately before a closing quote can be
+    // interpreted as escaping that quote. Use an unquoted root drive and
+    // remove the final separator from ordinary directory names.
+    const bool driveRoot = directory.size() == 3 && directory[1] == L':' &&
+                           directory[2] == L'\\';
+    if (driveRoot) return L"/n," + directory;
+    while (!directory.empty() && (directory.back() == L'\\' || directory.back() == L'/'))
+        directory.pop_back();
+    return L"/n,\"" + directory + L"\"";
+}
 bool RestoreExplorerWindow(HWND owner) {
     const std::wstring& directory = g_ui.executableDirectory;
     if (directory.empty()) return false;
@@ -293,7 +304,7 @@ bool RestoreExplorerWindow(HWND owner) {
     std::wstring explorer(windowsDirectory);
     if (explorer.back() != L'\\') explorer += L'\\';
     explorer += L"explorer.exe";
-    const std::wstring parameters = L"/n,\"" + directory + L"\"";
+    const std::wstring parameters = ExplorerArguments(directory);
     SHELLEXECUTEINFOW launch{};
     launch.cbSize = sizeof(launch);
     launch.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
@@ -614,6 +625,11 @@ int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest) {
     SetTimer(window,kAnimationTimer,80,nullptr);
 
     if (smokeTest) {
+        if (ExplorerArguments(L"E:\\") != L"/n,E:\\" ||
+            ExplorerArguments(L"E:\\Example Folder\\") != L"/n,\"E:\\Example Folder\"") {
+            DestroyWindow(window);
+            return 8;
+        }
         PostUpdate(window,1,2,L"正在测试窗口绘制和进度更新");
         PostResult(window,{0,L"界面绘制、进度和结束状态检查完成。"});
     } else {
