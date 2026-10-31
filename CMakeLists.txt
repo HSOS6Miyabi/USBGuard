@@ -2,10 +2,28 @@ cmake_minimum_required(VERSION 3.21)
 project(USBReadOnlySwitch VERSION 1.1.0 LANGUAGES CXX)
 if(WIN32)
     enable_language(RC)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+    # Generate an anti-aliased, multi-resolution icon without external image libraries.
+    set(ICON_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    file(MAKE_DIRECTORY "${ICON_OUTPUT_DIR}")
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/assets/generate_icon.py"
+                "${ICON_OUTPUT_DIR}/usb-guard.ico"
+        RESULT_VARIABLE ICON_GENERATION_RESULT
+        ERROR_VARIABLE ICON_GENERATION_ERROR)
+    if(NOT ICON_GENERATION_RESULT EQUAL 0)
+        message(FATAL_ERROR "USBGuard icon generation failed: ${ICON_GENERATION_ERROR}")
+    endif()
+
+    file(WRITE "${ICON_OUTPUT_DIR}/ui.generated.rc"
+        "#include <winuser.h>\\n101 ICON \\"${ICON_OUTPUT_DIR}/usb-guard.ico\\"\\n1 RT_MANIFEST \\"${CMAKE_CURRENT_SOURCE_DIR}/app.manifest\\"\\n")
+    file(WRITE "${ICON_OUTPUT_DIR}/toast.generated.rc"
+        "#include <winuser.h>\\n101 ICON \\"${ICON_OUTPUT_DIR}/usb-guard.ico\\"\\n1 RT_MANIFEST \\"${CMAKE_CURRENT_SOURCE_DIR}/toast.manifest\\"\\n")
 
 set(COMMON_SOURCES engine.cpp engine.hpp command.cpp command.hpp policy.hpp)
-add_executable(USBGuardUI WIN32 ui_main.cpp ${COMMON_SOURCES} ui.rc)
-add_executable(USBGuardToast WIN32 toast_main.cpp ${COMMON_SOURCES} toast.rc)
+add_executable(USBGuardUI WIN32 ui_main.cpp ${COMMON_SOURCES} "${ICON_OUTPUT_DIR}/ui.generated.rc")
+add_executable(USBGuardToast WIN32 toast_main.cpp ${COMMON_SOURCES} "${ICON_OUTPUT_DIR}/toast.generated.rc")
 foreach(target IN ITEMS USBGuardUI USBGuardToast)
     target_compile_features(${target} PRIVATE cxx_std_17)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
