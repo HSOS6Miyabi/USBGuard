@@ -272,6 +272,7 @@ void BuildUI() {
 }
 }
 int main(int argc,char** argv) {
+    const bool uiTest = argc == 2 && std::string(argv[1]) == "--ui-self-test";
     // GTK selects native Wayland or X11 dynamically based on the active session.
     if(!gtk_init_check(&argc,&argv)) {
         fprintf(stderr,"无法连接图形显示服务器。请使用 USBGuardLinuxCLI --list 或 --status。\n");
@@ -280,6 +281,10 @@ int main(int argc,char** argv) {
     ui.helper=HelperPath();
     LoadStyles();
     BuildUI();
+    if(uiTest) {
+        Post(std::make_unique<Event>(Event{"窗口显示、进度更新和自动退出验证",1,2,false,false}));
+        g_timeout_add(800,CloseLater,nullptr);
+    }
     gtk_main();
     return 0;
 }
