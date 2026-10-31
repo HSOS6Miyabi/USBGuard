@@ -1,3 +1,0 @@
-#include <winuser.h>
-101 ICON "assets/usb-guard.ico"
-1 RT_MANIFEST "toast.manifest"
