@@ -169,19 +169,43 @@ std::wstring MountPoints(const std::wstring& volumeName) {
     return result.empty() ? L"（没有盘符）" : result;
 }
 
-bool IsBasicDataPartition(HANDLE handle, PARTITION_STYLE style) {
+bool IsEligiblePartition(HANDLE handle, PARTITION_STYLE style) {
     PARTITION_INFORMATION_EX partition{};
     DWORD returned = 0;
     if (!DeviceIoControl(handle, IOCTL_DISK_GET_PARTITION_INFO_EX, nullptr, 0,
                          &partition, sizeof(partition), &returned, nullptr)) return false;
     if (partition.PartitionStyle != style) return false;
     if (style == PARTITION_STYLE_GPT) {
-        const GUID basicData{0xebd0a0a2, 0xb9e5, 0x4433,
-                             {0x87, 0xc0, 0x68, 0xb6, 0xb7, 0x26, 0x99, 0xc7}};
-        return IsEqualGUID(partition.Gpt.PartitionType, basicData) != 0;
+        // Protect Windows-mountable data regardless of GPT type, excluding
+        // special partitions whose attribute changes can break dynamic disks.
+        const GUID msr = {0xe3c9e316, 0x0b5c, 0x4db8,
+                          {0x81, 0x7d, 0xf9, 0x2d, 0xf0, 0x02, 0x15, 0xae}};
+        const GUID ldmData = {0xaf9b60a0, 0x1431, 0x4f62,
+                              {0xbc, 0x68, 0x33, 0x11, 0x71, 0x4a, 0x69, 0xad}};
+        const GUID ldmMetadata = {0x5808c8aa, 0x7e8f, 0x42e0,
+                                  {0x85, 0xd2, 0xe1, 0xe9, 0x04, 0x34, 0xcf, 0xb3}};
+        return !IsEqualGUID(partition.Gpt.PartitionType, msr) &&
+               !IsEqualGUID(partition.Gpt.PartitionType, ldmData) &&
+               !IsEqualGUID(partition.Gpt.PartitionType, ldmMetadata);
     }
-    // 0x42 is the dynamic-disk (LDM) MBR partition type.
     return partition.Mbr.PartitionType != 0x42 && partition.Mbr.PartitionType != 0;
+}
+bool HasDriveLetterMount(const std::wstring& mounts) {
+    size_t at = 0;
+    while (at < mounts.size()) {
+        const size_t end = mounts.find(L", ", at);
+        const size_t length = end == std::wstring::npos ?
+                              mounts.size() - at : end - at;
+        if (length == 3) {
+            const wchar_t letter = mounts[at];
+            if (((letter >= L'A' && letter <= L'Z') ||
+                 (letter >= L'a' && letter <= L'z')) &&
+                mounts[at + 1] == L':' && mounts[at + 2] == L'\\') return true;
+        }
+        if (end == std::wstring::npos) break;
+        at = end + 2;
+    }
+    return false;
 }
 
 bool ReadAttributes(HANDLE handle, ULONGLONG& attributes, std::wstring& error) {
@@ -330,7 +354,7 @@ bool Discover(std::wstring& error) {
         ULONGLONG diskSize = 0;
         if (!DiskProperties(diskNumber, style, diskSize)) continue;
         if (g_windowsDisks.count(diskNumber) != 0) continue;
-        if (!IsBasicDataPartition(handle.get(), style)) continue;
+        if (!IsEligiblePartition(handle.get(), style)) continue;
         ULONGLONG attributes = 0;
         if (!ReadAttributes(handle.get(), attributes, tempError)) continue;
 
@@ -349,6 +373,7 @@ bool Discover(std::wstring& error) {
         v.devicePath = volumeName;
         v.diskNumber = diskNumber;
         v.mountPoints = MountPoints(volumeName);
+        if (!HasDriveLetterMount(v.mountPoints)) continue;
         v.fileSystem = fileSystem;
         v.attributes = attributes;
         v.readonly = (attributes & kReadOnly) != 0;
@@ -386,7 +411,8 @@ bool ReadSelectedAttributes(Disk& disk, std::vector<size_t>& targets,
         }
         DWORD actualDisk = MAXDWORD;
         if (!OneDiskExtent(handle.get(), actualDisk, error) || actualDisk != disk.number ||
-            !IsBasicDataPartition(handle.get(), disk.style)) {
+            (!IsEligiblePartition(handle.get(), disk.style) ||
+              !HasDriveLetterMount(volume.mountPoints))) {
             error = L"卷的物理位置或分区类型发生变化，已拒绝操作：" + volume.mountPoints;
             return false;
         }
@@ -443,6 +469,7 @@ bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progre
         summary += L"当前文件系统状态与持久属性一致。";
         return true;
     }
+    // If selected volumes differ, Toggle protects all of them in one operation.
     const bool desired = policy::DesiredReadOnly(action, allReadOnly);
 
     // The MBR layout has one portable metadata record for the entire disk.
@@ -509,6 +536,21 @@ bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progre
         volume.readonly = desired;
         ++steps;
         if (progress) progress(steps, targets.size(), L"已处理 " + volume.mountPoints);
+    }
+    // Verify every selected GPT volume, including unchanged volumes, before
+    // accepting the disk-wide result.
+    for (const size_t index : targets) {
+        std::wstring error;
+        auto handle = OpenVolume(disk.volumes[index].devicePath);
+        ULONGLONG attributes = 0;
+        if (!handle || !ReadAttributes(handle.get(), attributes, error) ||
+            (((attributes & kReadOnly) != 0) != desired)) {
+            summary = L"卷属性状态不一致：" + disk.volumes[index].mountPoints +
+                      L"。请重新读取卷状态。";
+            return false;
+        }
+        disk.volumes[index].attributes = attributes;
+        disk.volumes[index].readonly = desired;
     }
     if (progress) progress(targets.size(), targets.size() + 1, L"正在刷新文件系统并验证实际状态");
     std::vector<std::wstring> devices;
