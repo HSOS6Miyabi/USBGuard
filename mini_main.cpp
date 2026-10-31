@@ -2,6 +2,12 @@
 #define NOMINMAX
 #include "command.hpp"
 #include <windows.h>
+#if defined(_WIN32_WINNT) && _WIN32_WINNT <= 0x0501
+// v7.1A ObjBase.h assumes IUnknown has been declared first.
+#define COM_NO_WINDOWS_H
+#include <unknwn.h>
+#undef COM_NO_WINDOWS_H
+#endif
 #include <objbase.h>
 #include <shellapi.h>
 #include <sddl.h>
