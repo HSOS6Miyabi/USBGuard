@@ -38,8 +38,12 @@ jobs:
           $installPath = (& $vswhere -latest -products '*' -property installationPath | Select-Object -First 1).Trim()
           if (!$installPath) { throw 'Visual Studio 2022 installation not found' }
           $toolsetPath = Join-Path $installPath 'MSBuild\Microsoft\VC\v170\Platforms\Win32\PlatformToolsets\v141_xp'
-          if (!(Test-Path $toolsetPath)) {
-            $installer = Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\setup.exe'
+          $legacyToolsetPath = Join-Path $installPath 'MSBuild\Microsoft\VC\v150\Platforms\Win32\PlatformToolsets\v141_xp'
+          if (!(Test-Path $toolsetPath) -and !(Test-Path $legacyToolsetPath)) {
+            $installer = Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\vs_installer.exe'
+            if (!(Test-Path $installer)) {
+              $installer = Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\setup.exe'
+            }
             if (!(Test-Path $installer)) { throw "Visual Studio Installer not found: $installer" }
             $arguments = 'modify --installPath "' + $installPath +
               '" --add Microsoft.VisualStudio.Component.VC.v141.x86.x64' +
@@ -58,7 +62,7 @@ jobs:
           }
           $xpComponent = & $vswhere -all -products '*' -requires Microsoft.VisualStudio.Component.WinXP -property installationPath
           Write-Host "Visual Studio instances reporting Windows XP component: $xpComponent"
-          if (!(Test-Path $toolsetPath)) {
+          if (!(Test-Path $toolsetPath) -and !(Test-Path $legacyToolsetPath)) {
             Write-Host "Searching alternate installed v141_xp toolset locations"
             Get-ChildItem -LiteralPath (Join-Path $installPath 'MSBuild\Microsoft\VC') -Recurse -Directory -ErrorAction SilentlyContinue |
               Where-Object { $_.Name -like 'v141*' } |
