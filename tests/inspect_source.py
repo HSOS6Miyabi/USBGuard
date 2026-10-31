@@ -29,6 +29,13 @@ assert 'WM_PAINT' in mini and 'BitBlt' in mini and 'RoundRect' in mini
 assert 'kProgressMessage' in mini and 'kFinishedMessage' in mini
 assert 'PostMessageW(window,kProgressMessage' in mini
 assert 'PostMessageW(window,kFinishedMessage' in mini
+assert 'RECT CloseButtonRect()' in mini and 'g_ui.width - Scale(14)' in mini
+assert 'case WM_LBUTTONDOWN:' in mini and 'case WM_LBUTTONUP:' in mini
+assert 'if (dismiss) DismissMiniWindow(window);' in mini
+assert 'ShowWindow(window, SW_HIDE)' in mini
+assert 'if (!g_ui.dismissed)' in mini
+assert 'if (g_ui.closeTest && IsWindowVisible(window)) g_ui.exitCode = 8;' in mini
+assert '--ui-close-test' in mini and 'mini_ui_close' in cmake
 assert 'std::thread' in mini and 'g_ui.worker.join()' in mini
 assert 'CompatTickCount()' in mini and 'kFinishDurationMs = 4200' in mini
 assert 'GetProcAddress(kernel, "GetTickCount64")' in mini
