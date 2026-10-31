@@ -1,62 +1,56 @@
-# USBGuard Linux
+# USBGuard Linux 使用说明
 
-适用于 Linux 的便携式 U 盘只读保护工具，提供两个可执行文件：
+Linux 版可以在图形桌面中使用，也可以直接在终端里运行。它只会处理识别为 USB 磁盘、并且已经挂载的文件系统。
 
-- **USBGuardLinux**：GTK 3 图形界面，适用 Wayland、X11、Xwayland，支持 GNOME、KDE Plasma、Xfce、LXQt、Cinnamon、MATE、Sway、Hyprland、i3、Openbox 等采用上述显示系统的环境。
-- **USBGuardLinuxCLI**：无图形环境的命令行版本，不依赖 GTK、特定窗口管理器或桌面服务。
+## 选择程序
 
-## 使用方式
+| 程序 | 用途 |
+| --- | --- |
+| `USBGuardLinux` | GTK 3 图形界面，可选择 USB 磁盘、切换只读、查看进度 |
+| `USBGuardLinuxCLI` | 命令行程序，不依赖图形桌面 |
 
-将两个可执行文件放在同一个目录并赋予执行权限：
+支持 x86_64 和 aarch64。在 [Releases](https://github.com/HSOS6Miyabi/USBGuard/releases/latest) 下载对应的 `.tar.gz` 文件并解压。
 
-\`\`\`sh
+## 图形界面怎么用？
+
+将两个可执行文件放在同一个目录中，然后运行：
+
+```sh
 chmod +x USBGuardLinux USBGuardLinuxCLI
 ./USBGuardLinux
-\`\`\`
+```
 
-在界面中选择 USB 设备，点击“切换保护”“启用只读”“解除只读”或“查看状态”。如果程序本身位于 U 盘上，会优先选择其所在的 USB 设备。
+选择要保护的 USB 磁盘，然后点击“切换保护”。程序会在需要时请求管理员权限，并展示写保护进度与结果。
 
-命令行示例：
+GTK 3 支持 X11、Wayland 和 Xwayland，可在 GNOME、KDE Plasma、Xfce、LXQt 等桌面中使用。Sway、Hyprland、i3、Openbox 等环境也可使用相应显示后端；需要系统安装 GTK 3，并有可用的 polkit 授权代理。
 
-\`\`\`sh
+如果点击按钮后没有出现授权窗口，通常是当前会话没有运行 polkit 认证代理。这时可以直接使用下面的命令行方式。
+
+## 终端怎么用？
+
+先查看 U 盘对应的设备名称：
+
+```sh
 ./USBGuardLinuxCLI --list
+```
+
+假设目标为 `/dev/sdb`：
+
+```sh
 ./USBGuardLinuxCLI --device /dev/sdb --status
 sudo ./USBGuardLinuxCLI --device /dev/sdb --protect
 sudo ./USBGuardLinuxCLI --device /dev/sdb --unprotect
 sudo ./USBGuardLinuxCLI --device /dev/sdb --toggle
-\`\`\`
+```
 
-省略 \`--device\` 时会尝试选择 CLI 程序所在的 USB 磁盘。程序会验证目标物理磁盘具有 USB 总线的 sysfs 设备关系，避免误操作主机系统盘；目标 USB 磁盘必须存在当前已挂载的文件系统。
+请确认实际设备名后再执行。程序会检查物理磁盘是否属于 USB 总线，并避开检测到的系统启动盘。若 CLI 就在目标 U 盘中，可以尝试省略 `--device` 自动选择。
 
-**管理员授权**：图形界面调用系统 \`pkexec\` 请求授权。GNOME、KDE Plasma、Xfce 等桌面一般自带 polkit 代理。独立的 Sway、Hyprland、i3、Openbox 等会话可能需要单独运行 polkit 认证代理；没有代理时仍可在终端使用 \`sudo USBGuardLinuxCLI\`。本程序不安装服务、驱动、认证代理或 udev 规则。
+## 需要安装什么？
 
-## 写保护原理和有效期
+图形版依赖系统提供的 GTK 3 和 polkit。CLI 不依赖 GTK。
 
-1. 在 \`/sys/class/block\` 识别 USB 总线物理磁盘，读取 \`/proc/self/mountinfo\` 选择当前已挂载的文件系统。
-2. 通过 \`mount(MS_REMOUNT | MS_RDONLY)\` 将挂载的文件系统切换到只读状态。
-3. 通过 \`BLKROSET\` 设置对应分区的 Linux 内核块设备只读状态。
-4. 使用挂载信息与 \`BLKROGET\` 分别检查两种实际状态；只有所有卷均满足期望时才报告成功。
-5. 解除保护时先解除块设备只读，再将文件系统重新挂载为可写。若部分卷的设置失败，会尝试恢复原有状态，并如实报告任何未完成的恢复操作。
-
-当部分卷只读、部分卷可写时，“切换保护”会统一将当前目标卷设为只读；只有所有目标卷均为只读时才统一解除。
-
-**重要：Linux 版保护仅对当前设备连接期间有效。** USB 设备断开并重新接入后，内核块设备只读状态通常会被重置。Linux 不会普遍通过 GPT 的 Windows 专用位 60 属性自动实施只读保护。Linux 版本不会修改 GPT/MBR 分区表，也不会安装自动恢复保护的系统规则。若需要跨操作系统、拔插后仍然持久生效的防写入机制，应使用具有硬件写保护开关的介质。
-
-保护过程中会同步及重新挂载文件系统。操作前请保存未保存的文件、停止正在写入 U 盘的程序。部分设备、文件系统和文件系统驱动不支持即时重新挂载，程序会报告失败。具有管理员权限的进程仍可主动取消软件只读状态。
-
-## 图形环境兼容性
-
-GTK 3 自动使用会话支持的 GDK 后端：
-
-- **Wayland**：优先使用原生 Wayland 后端；浮窗的最终位置由 compositor 决定。
-- **X11/Xorg**：使用 GTK 的 X11 后端，兼容主流桌面及独立窗口管理器。
-- **Xwayland**：当 GTK 在 Wayland 环境中选择 X11 后端时可以使用，取决于系统是否安装 Xwayland。
-- **无图形桌面**：直接运行 \`USBGuardLinuxCLI\`。
-
-GTK 3 图形程序需要系统安装 GTK 3 运行库；命令行程序无 GTK 依赖。安装依赖示例：
-
-\`\`\`sh
-# Debian / Ubuntu
+```sh
+# Ubuntu / Debian
 sudo apt install libgtk-3-0 policykit-1
 
 # Fedora
@@ -64,19 +58,37 @@ sudo dnf install gtk3 polkit
 
 # Arch Linux
 sudo pacman -S gtk3 polkit
-\`\`\`
+```
 
-实际 polkit 认证界面由用户桌面中的授权代理提供；若没有图形授权代理，可以使用终端中的 sudo。
+不同发行版的 polkit 认证代理可能单独打包，请根据正在使用的桌面环境安装相应组件。
 
-## 本地编译与测试
+## 写保护能持续多久？
 
-\`\`\`sh
-# Debian/Ubuntu 编译依赖：g++ cmake pkg-config libgtk-3-dev xvfb xauth
+**Linux 版的只读状态通常只在本次连接期间有效。** U 盘拔出后再插入，内核可能恢复可写状态，需要重新启用保护。
+
+程序先将已挂载的文件系统重新挂载为只读，再使用 `BLKROSET` 设置分区的块设备只读属性；解除保护时先取消块设备只读，再恢复文件系统可写。每一步都会验证实际结果。
+
+如果有多个已挂载分区，只要其中一个可写，“切换保护”就会尝试将它们统一改为只读。出现失败时，程序会尝试恢复此前状态，并明确提示。
+
+程序不会修改 GPT/MBR 分区表，不会安装服务或修改 udev 规则。具有管理员权限的程序仍可以取消软件写保护。对写保护要求很高的场景，应选择带硬件写保护开关的设备。
+
+**操作前请先保存文件，停止正在写入 U 盘的程序。** 个别文件系统和驱动可能拒绝立即重新挂载，此时需要关闭占用程序后重试。
+
+## 编译与测试
+
+需要 C++17 编译器和 CMake。编译图形版还需要 GTK 3 开发包，自动测试窗口可安装 `xvfb` 和 `xauth`。
+
+```sh
 cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build-linux --parallel
 ctest --test-dir build-linux --output-on-failure
-\`\`\`
+```
 
-如果没有 GTK 3 开发包，CMake 仍可只编译命令行版本；也可以设置 \`-DUSBGUARD_LINUX_GUI=OFF\`。GitHub Actions 在 Ubuntu 上分别构建 x86_64 和 aarch64 Linux 版本，自动运行块设备模拟测试和 Xvfb 图形窗口测试。
+如果只需要 CLI：
 
-CI 的模拟测试验证两卷混合状态、回退行为及进度报告；不能替代在真实 USB 硬件、各种文件系统或真实 Wayland 会话下的验证。
+```sh
+cmake -S . -B build-linux-cli -DUSBGUARD_LINUX_GUI=OFF
+cmake --build build-linux-cli --parallel
+```
+
+项目的 GitHub Actions 会在 x86_64、aarch64 Linux 上编译与测试，并分别使用 Xvfb 和无界面的 Weston 检查 X11、Wayland 的界面启动。USB 设备的实际效果还需要结合设备及文件系统验证。
