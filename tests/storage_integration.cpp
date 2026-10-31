@@ -4,6 +4,8 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <vector>
+#include <algorithm>
 
 namespace {
 bool ProbeWrite(const std::wstring& path) {
@@ -127,8 +129,17 @@ int wmain(int argc, wchar_t** argv) {
         std::wcerr << L"Initial write and reopen verification failed\n";
         return 7;
     }
+    std::vector<std::wstring> phases;
+    bool monotonic = true;
+    size_t previousDone = 0;
+    auto progress = [&](size_t done, size_t total, const std::wstring& stage) {
+        if (total == 0 || done > total || done < previousDone) monotonic = false;
+        previousDone = done;
+        phases.push_back(stage);
+        std::wcout << L"PROGRESS " << done << L"/" << total << L" " << stage << std::endl;
+    };
     std::wstring protectedResult;
-    bool protectedOk = usb::ChangeDisk(*target, policy::Action::Protect, protectedResult);
+    bool protectedOk = usb::ChangeDisk(*target, policy::Action::Protect, protectedResult, progress);
     Trace(L"Protect", protectedResult);
     bool actualReadOnly = false;
     bool statusKnown = false;
@@ -139,12 +150,22 @@ int wmain(int argc, wchar_t** argv) {
     bool restoredOk = usb::ChangeDisk(*target, policy::Action::Unprotect, restoredResult);
     Trace(L"Unprotect", restoredResult);
     bool writableAgain = restoredOk && ProbeWrite(restoredPath);
+    const auto saw = [&](const wchar_t* stage) {
+        return std::any_of(phases.begin(), phases.end(), [stage](const std::wstring& item) {
+            return item.find(stage) != std::wstring::npos;
+        });
+    };
+    const bool phaseCoverage = saw(L"正在写入") &&
+                               saw(L"正在强制卸载卷") &&
+                               saw(L"正在重新挂载卷") &&
+                               saw(L"正在验证卷只读状态");
     if (!protectedOk || !statusKnown || !actualReadOnly ||
-        !correctlyBlocked || !writableAgain) {
+        !correctlyBlocked || !writableAgain || !monotonic || !phaseCoverage) {
         std::wcerr << L"Read-only enforcement failed. protect=" << protectedOk
                    << L" mounted=" << statusKnown << L" readonly=" << actualReadOnly
                    << L" blockedWrite=" << correctlyBlocked
-                   << L" unprotect=" << restoredOk << L" writableAgain=" << writableAgain << std::endl;
+                   << L" unprotect=" << restoredOk << L" writableAgain=" << writableAgain
+                   << L" monotonic=" << monotonic << L" phases=" << phaseCoverage << std::endl;
         return 8;
     }
     std::wcout << L"Disposable VHD write-protection cycle PASSED (" << argv[3] << L")\n";
