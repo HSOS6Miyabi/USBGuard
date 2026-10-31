@@ -66,7 +66,7 @@ void Populate() {
         }
         Status(disk->style == PARTITION_STYLE_MBR
             ? L"MBR：单次设置整个磁盘的持久属性，影响该盘全部分区。"
-            : L"GPT：设置勾选分区的持久只读属性，未识别的分区保持原状。");
+            : L"GPT：处理当前有盘符的勾选卷，并验证所有目标卷的只读状态一致。");
     } else Status(L"尚未选择磁盘。请将程序放在 U 盘中运行，或手动选择安全的 USB 设备。");
     SendMessageW(progress, PBM_SETPOS, 0, 0);
     filling = false;
