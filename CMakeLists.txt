@@ -21,9 +21,23 @@ if(WIN32)
     file(WRITE "${ICON_OUTPUT_DIR}/mini.generated.rc"
         "#define RT_MANIFEST 24\n101 ICON \"${ICON_OUTPUT_DIR}/usb-guard.ico\"\n1 RT_MANIFEST \"${CMAKE_CURRENT_SOURCE_DIR}/mini.manifest\"\n")
 
+    set(USBGUARD_FILE_DESCRIPTION "USBGuard - USB drive write protection manager")
+    set(USBGUARD_INTERNAL_NAME "USBGuardUI")
+    set(USBGUARD_ORIGINAL_FILENAME "USBGuardUI.exe")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/assets/version_info.rc.in"
+                   "${ICON_OUTPUT_DIR}/ui.version.rc" @ONLY)
+
+    set(USBGUARD_FILE_DESCRIPTION "USBGuard Mini - Portable USB write protection")
+    set(USBGUARD_INTERNAL_NAME "USBGuardMini")
+    set(USBGUARD_ORIGINAL_FILENAME "USBGuardMini.exe")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/assets/version_info.rc.in"
+                   "${ICON_OUTPUT_DIR}/mini.version.rc" @ONLY)
+
 set(COMMON_SOURCES engine.cpp engine.hpp command.cpp command.hpp policy.hpp)
-add_executable(USBGuardUI WIN32 ui_main.cpp ${COMMON_SOURCES} "${ICON_OUTPUT_DIR}/ui.generated.rc")
-add_executable(USBGuardMini WIN32 mini_main.cpp ${COMMON_SOURCES} "${ICON_OUTPUT_DIR}/mini.generated.rc")
+add_executable(USBGuardUI WIN32 ui_main.cpp ${COMMON_SOURCES}
+    "${ICON_OUTPUT_DIR}/ui.generated.rc" "${ICON_OUTPUT_DIR}/ui.version.rc")
+add_executable(USBGuardMini WIN32 mini_main.cpp ${COMMON_SOURCES}
+    "${ICON_OUTPUT_DIR}/mini.generated.rc" "${ICON_OUTPUT_DIR}/mini.version.rc")
 foreach(target IN ITEMS USBGuardUI USBGuardMini)
     target_compile_features(${target} PRIVATE cxx_std_17)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -123,6 +123,55 @@ def inspect(path: Path, expected_machine: int) -> set[str]:
         else:
             raise AssertionError(f'{path}: unterminated delay import table')
 
+    # Locate the RT_VERSION resource and inspect its actual serialized data.
+    # This validates what Windows Explorer reads from the executable.
+    def resource_entries(relative: int):
+        directory_offset = offset(resource_rva + relative)
+        named, numbered = struct.unpack_from('<HH', data, directory_offset + 12)
+        assert named + numbered < 2048, f'{path}: unreasonable resource entry count'
+        entries = []
+        for i in range(named + numbered):
+            key, value = struct.unpack_from('<II', data, directory_offset + 16 + i * 8)
+            entries.append((key, value))
+        return entries
+
+    types = resource_entries(0)
+    version_types = [value for key, value in types if key == 16]
+    assert len(version_types) == 1 and version_types[0] & 0x80000000, (
+        f'{path}: missing RT_VERSION resource'
+    )
+    version_ids = resource_entries(version_types[0] & 0x7fffffff)
+    version_entries = [value for key, value in version_ids if key == 1]
+    assert len(version_entries) == 1 and version_entries[0] & 0x80000000, (
+        f'{path}: missing VERSIONINFO ID 1'
+    )
+    languages = resource_entries(version_entries[0] & 0x7fffffff)
+    assert languages and not (languages[0][1] & 0x80000000)
+    resource_data = offset(resource_rva + languages[0][1])
+    version_rva, version_length = struct.unpack_from('<II', data, resource_data)
+    version_start = offset(version_rva)
+    version_blob = data[version_start:version_start + version_length]
+    assert len(version_blob) == version_length and version_length >= 92
+    assert struct.unpack_from('<H', version_blob, 0)[0] == version_length
+    assert 'VS_VERSION_INFO'.encode('utf-16le') in version_blob
+    assert struct.pack('<I', 0xFEEF04BD) in version_blob
+
+    expected_description = (
+        'USBGuard Mini - Portable USB write protection'
+        if path.stem == 'USBGuardMini'
+        else 'USBGuard - USB drive write protection manager'
+    )
+    expected_strings = (
+        'Kenvix', 'Kenvix <i@kenvix.com>',
+        'Copyright (C) 2026 Kenvix <i@kenvix.com>',
+        'https://kenvix.com', 'USBGuard', expected_description,
+        path.name, '1.1.0',
+    )
+    for value in expected_strings:
+        assert value.encode('utf-16le') + b'\\x00\\x00' in version_blob, (
+            f'{path}: VERSIONINFO is missing {value!r}'
+        )
+
     assert imports, f'{path}: no DLL import descriptors were found'
     foreign = sorted(d for d in imports if
                      d not in SYSTEM_DLLS and
@@ -139,7 +188,7 @@ def inspect(path: Path, expected_machine: int) -> set[str]:
         }
         direct = sorted(imported_functions & newer_apis)
         assert not direct, f'{path}: newer Windows functions imported directly: {direct}'
-    print(f'{path}: PE machine=0x{machine:04x}; GUI; icon/manifest; '
+    print(f'{path}: PE machine=0x{machine:04x}; GUI; icon/manifest/version; '
           f'only Windows DLL imports: {", ".join(sorted(imports))}')
     return imports
 

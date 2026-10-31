@@ -1,0 +1,34 @@
+#include <winver.h>
+
+// Windows Explorer file properties for the portable executables.
+1 VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Kenvix\0"
+            VALUE "FileDescription", "@USBGUARD_FILE_DESCRIPTION@\0"
+            VALUE "FileVersion", "@PROJECT_VERSION@\0"
+            VALUE "InternalName", "@USBGUARD_INTERNAL_NAME@\0"
+            VALUE "OriginalFilename", "@USBGUARD_ORIGINAL_FILENAME@\0"
+            VALUE "ProductName", "USBGuard\0"
+            VALUE "ProductVersion", "@PROJECT_VERSION@\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Kenvix <i@kenvix.com>\0"
+            VALUE "Author", "Kenvix <i@kenvix.com>\0"
+            VALUE "SupportURL", "https://kenvix.com\0"
+            VALUE "Comments", "Author: Kenvix <i@kenvix.com>; Support: https://kenvix.com\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
