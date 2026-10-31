@@ -48,16 +48,16 @@ jobs:
         shell: pwsh
         run: |
           python tests/inspect_pe.py "build/Release/USBGuardUI.exe" "${{ matrix.pe_machine }}"
-          python tests/inspect_pe.py "build/Release/USBGuardToast.exe" "${{ matrix.pe_machine }}"
+          python tests/inspect_pe.py "build/Release/USBGuardMini.exe" "${{ matrix.pe_machine }}"
       - name: Package portable applications
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item build/Release/USBGuardUI.exe "dist/USBGuardUI-${{ matrix.name }}.exe"
-          Copy-Item build/Release/USBGuardToast.exe "dist/USBGuardToast-${{ matrix.name }}.exe"
+          Copy-Item build/Release/USBGuardMini.exe "dist/USBGuardMini-${{ matrix.name }}.exe"
           Copy-Item README.md dist/README.md
-          Compress-Archive -Path dist/README.md,dist/USBGuardUI-${{ matrix.name }}.exe,dist/USBGuardToast-${{ matrix.name }}.exe -DestinationPath "dist/USBGuard-${{ matrix.name }}.zip"
+          Compress-Archive -Path dist/README.md,dist/USBGuardUI-${{ matrix.name }}.exe,dist/USBGuardMini-${{ matrix.name }}.exe -DestinationPath "dist/USBGuard-${{ matrix.name }}.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: USBGuard-${{ matrix.name }}
@@ -101,5 +101,5 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $tag = '${{ steps.info.outputs.tag }}'
-          $notes = "Windows portable builds for x86, x64 and ARM64. Both UI and Toast editions. SHA-256 checksums in SHA256SUMS.txt. Hardware USB write-protection behavior requires physical-device testing."
+          $notes = "Windows portable builds for x86, x64 and ARM64. Both full UI and compact Mini editions. SHA-256 checksums in SHA256SUMS.txt. Hardware USB write-protection behavior requires physical-device testing."
           gh release create "$tag" release-assets/*.exe release-assets/*.zip release-assets/SHA256SUMS.txt --repo "$env:GITHUB_REPOSITORY" --title "USBGuard $tag" --notes "$notes" --verify-tag=false
