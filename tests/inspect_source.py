@@ -30,7 +30,22 @@ assert 'kProgressMessage' in mini and 'kFinishedMessage' in mini
 assert 'PostMessageW(window,kProgressMessage' in mini
 assert 'PostMessageW(window,kFinishedMessage' in mini
 assert 'std::thread' in mini and 'g_ui.worker.join()' in mini
-assert 'GetTickCount64()' in mini and 'kFinishDurationMs = 4200' in mini
+assert 'CompatTickCount()' in mini and 'kFinishDurationMs = 4200' in mini
+assert 'GetProcAddress(kernel, "GetTickCount64")' in mini
+assert 'GetProcAddress(kernel, "GetNamedPipeClientProcessId")' in mini
+assert 'GetProcAddress(kernel, "CancelIoEx")' in mini
+assert 'GetProcAddress(user32, "SetProcessDpiAwarenessContext")' in mini
+assert 'CheckTokenMembership' in mini
+assert 'bool RestoreExplorerWindow(HWND owner)' in mini
+assert 'g_ui.executableDirectory=ExecutableDirectory();' in mini
+assert 'ShellExecuteW(owner, L"open", directory.c_str()' in mini
+assert 'g_ui.requestedAction != policy::Action::Status' in mini
+assert 'g_ui.succeeded && !g_ui.smokeTest' in mini
+assert 'HasDriveLetterMount' in engine and 'IsEligiblePartition' in engine
+assert 'IsBasicDataPartition' not in engine
+assert 'if (!HasDriveLetterMount(v.mountPoints)) continue' in engine
+assert 'If selected volumes differ, Toggle protects all' in engine
+assert '"Win32"' in cmake and '/SUBSYSTEM:WINDOWS,5.01' in cmake
 assert 'DestroyWindow(window)' in mini
 assert '--ui-self-test' in mini and 'mini_ui_smoke' in cmake
 assert 'USBGuardMini' in cmake and 'USBGuardUI' in cmake
