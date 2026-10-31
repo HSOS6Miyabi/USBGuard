@@ -265,42 +265,65 @@ bool ReadMountedReadOnly(const std::wstring& volume, bool& readonly) {
 }
 
 bool RefreshMountedState(DWORD diskNumber, const std::vector<std::wstring>& volumeDevices,
-                         bool desiredReadOnly, std::wstring& detail) {
-    // Refresh the partition manager before forcing the file system to remount.
+                         bool desiredReadOnly, std::wstring& detail, Progress progress) {
+    const size_t total = 1 + volumeDevices.size() * 4;
+    size_t completed = 0;
+    auto report = [&](const std::wstring& stage) {
+        if (progress) progress(completed, total, stage);
+    };
+    report(L"正在刷新物理磁盘属性");
     DWORD bytes = 0;
     auto disk = AutoHandle(CreateFileW(DiskPath(diskNumber).c_str(), GENERIC_READ,
                                        kShare, nullptr, OPEN_EXISTING, 0, nullptr));
     const bool diskUpdated = disk && DeviceIoControl(disk.get(), IOCTL_DISK_UPDATE_PROPERTIES,
                                                      nullptr, 0, nullptr, 0, &bytes, nullptr);
     const DWORD updateError = diskUpdated ? ERROR_SUCCESS : GetLastError();
+    ++completed;
+    report(L"磁盘属性刷新请求已完成");
     size_t unresolved = 0;
     std::wstring reasons;
     for (const auto& volume : volumeDevices) {
+        const std::wstring label = volume;
         bool dismounted = false;
         DWORD lockError = ERROR_SUCCESS;
         DWORD dismountError = ERROR_SUCCESS;
+        bool liveReadOnly = false;
+        bool known = false;
+        report(L"正在打开卷 " + label);
         {
             auto handle = OpenVolume(volume);
+            ++completed;
             if (!handle) {
                 dismountError = GetLastError();
+                report(L"打开卷失败 " + label);
+                ++completed;
+                report(L"无法卸载卷 " + label);
+                ++completed;
+                report(L"无法重新挂载卷 " + label);
             } else {
-                // An exclusive lock flushes pending writes when possible.
-                // If other processes keep the volume open, dismount it anyway:
-                // stale handles may then fail and unflushed writes may be lost.
+                report(L"正在请求卷独占访问 " + label);
+                // When a volume is busy, a dismount is still attempted.
                 const bool locked = DeviceIoControl(handle.get(), FSCTL_LOCK_VOLUME,
                                                      nullptr, 0, nullptr, 0, &bytes, nullptr) != FALSE;
                 if (!locked) lockError = GetLastError();
+                ++completed;
+                report(L"正在强制卸载卷 " + label);
                 dismounted = DeviceIoControl(handle.get(), FSCTL_DISMOUNT_VOLUME,
                                              nullptr, 0, nullptr, 0, &bytes, nullptr) != FALSE;
                 if (!dismounted) dismountError = GetLastError();
+                ++completed;
+                report(L"正在重新挂载卷 " + label);
+                // The handle is released at scope exit to let Windows remount.
             }
         }
-        // Querying the volume by GUID forces Windows to mount a fresh instance.
-        bool liveReadOnly = false;
-        const bool known = dismounted && ReadMountedReadOnly(volume, liveReadOnly);
+        // A fresh volume query requests a new filesystem mount.
+        known = dismounted && ReadMountedReadOnly(volume, liveReadOnly);
+        report(L"正在验证卷只读状态 " + label);
+        ++completed;
+        report(L"卷状态验证已完成 " + label);
         if (!known || liveReadOnly != desiredReadOnly) {
             ++unresolved;
-            reasons += L"卷 " + volume + L" 未确认当前文件系统已切换";
+            reasons += L"卷 " + label + L" 未确认当前文件系统已切换";
             if (dismountError != ERROR_SUCCESS)
                 reasons += L"（强制卸载失败：" + ErrorText(dismountError) + L"）";
             else if (!known)
@@ -472,9 +495,12 @@ bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progre
     // If selected volumes differ, Toggle protects all of them in one operation.
     const bool desired = policy::DesiredReadOnly(action, allReadOnly);
 
-    // The MBR layout has one portable metadata record for the entire disk.
+    // One MBR metadata update applies to every recognized volume.
     if (disk.style == PARTITION_STYLE_MBR) {
-        if (progress) progress(0, 1, L"正在更新 MBR 的整盘持久属性");
+        const size_t writing = 1 + targets.size();
+        const size_t refreshing = 1 + 4 * targets.size();
+        const size_t total = writing + refreshing + 1;
+        if (progress) progress(0, total, L"正在写入 MBR 整盘持久只读属性");
         const size_t first = targets.front();
         const ULONGLONG requested = policy::ReplaceReadOnly(disk.volumes[first].attributes, desired);
         std::wstring error;
@@ -482,82 +508,92 @@ bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progre
             summary = L"MBR 整盘持久属性操作失败：" + error;
             return false;
         }
-        // Confirm every recognizable volume, since MBR applies to all of them.
+        if (progress) progress(1, total, L"MBR 持久属性已写入，正在复查各卷");
+        size_t verified = 0;
         for (auto index : targets) {
-            auto h = OpenVolume(disk.volumes[index].devicePath);
+            if (progress) progress(1 + verified, total,
+                                   L"正在复查卷持久属性 " + disk.volumes[index].mountPoints);
+            auto handle = OpenVolume(disk.volumes[index].devicePath);
             ULONGLONG flags = 0;
-            if (!h || !ReadAttributes(h.get(), flags, error) || (((flags & kReadOnly) != 0) != desired)) {
+            if (!handle || !ReadAttributes(handle.get(), flags, error) ||
+                (((flags & kReadOnly) != 0) != desired)) {
                 summary = L"MBR 已提交，但部分卷无法复查；请安全弹出并重新插入 U 盘后检查。";
                 return false;
             }
             disk.volumes[index].attributes = flags;
             disk.volumes[index].readonly = desired;
+            ++verified;
         }
-        if (progress) progress(1, 2, L"整盘持久属性已复查，正在刷新当前文件系统");
         std::vector<std::wstring> devices;
         for (const auto index : targets) devices.push_back(disk.volumes[index].devicePath);
         std::wstring refreshed;
-        const bool active = RefreshMountedState(disk.number, devices, desired, refreshed);
-        if (progress) progress(2, 2, active ? L"文件系统只读状态已验证" : L"需要重新插入 U 盘");
+        const bool active = RefreshMountedState(disk.number, devices, desired, refreshed,
+            [&](size_t done, size_t steps, const std::wstring& stage) {
+                if (progress) progress(writing + done, total, stage);
+            });
+        if (progress) progress(writing + refreshing + 1, total,
+                               active ? L"文件系统只读状态已验证" : L"需要重新插入 U 盘");
         summary = (desired ? L"MBR 整盘持久只读标志已启用。" :
                               L"MBR 整盘持久只读标志已解除。") + refreshed;
         return active;
     }
 
     struct PriorState { size_t index; ULONGLONG flags; };
-    std::vector<PriorState> completed;
-    size_t steps = 0;
+    std::vector<PriorState> changed;
+    const size_t writing = 2 * targets.size();
+    const size_t refreshing = 1 + 4 * targets.size();
+    const size_t total = writing + refreshing + 1;
+    size_t completed = 0;
     for (const size_t index : targets) {
-        if (progress) progress(steps, targets.size(), L"正在处理 " + disk.volumes[index].mountPoints);
         auto& volume = disk.volumes[index];
-        if (volume.readonly == desired) {
-            ++steps;
-            if (progress) progress(steps, targets.size(), L"已复查 " + volume.mountPoints);
-            continue;
-        }
-        const ULONGLONG previous = volume.attributes;
-        const ULONGLONG requested = policy::ReplaceReadOnly(previous, desired);
-        std::wstring error;
-        if (!WriteAttributes(volume.devicePath, requested, false, error)) {
-            // Best-effort rollback of changes already made in this operation.
-            bool restored = true;
-            for (auto it = completed.rbegin(); it != completed.rend(); ++it) {
-                std::wstring rollbackError;
-                if (!WriteAttributes(disk.volumes[it->index].devicePath, it->flags, false, rollbackError)) {
-                    restored = false;
+        if (progress) progress(completed, total,
+                               L"正在检查卷持久属性 " + volume.mountPoints);
+        if (volume.readonly != desired) {
+            const ULONGLONG previous = volume.attributes;
+            const ULONGLONG requested = policy::ReplaceReadOnly(previous, desired);
+            std::wstring error;
+            if (progress) progress(completed, total,
+                                   L"正在写入卷持久属性 " + volume.mountPoints);
+            if (!WriteAttributes(volume.devicePath, requested, false, error)) {
+                bool restored = true;
+                for (auto it = changed.rbegin(); it != changed.rend(); ++it) {
+                    std::wstring rollbackError;
+                    if (!WriteAttributes(disk.volumes[it->index].devicePath, it->flags, false, rollbackError))
+                        restored = false;
                 }
+                summary = L"卷 " + volume.mountPoints + L" 操作失败：" + error;
+                summary += restored ? L" 已尝试恢复此前修改的卷。" :
+                                      L" 部分卷恢复失败，请检查每个卷的状态。";
+                return false;
             }
-            summary = L"卷 " + volume.mountPoints + L" 操作失败：" + error;
-            summary += restored ? L" 已尝试恢复此前修改的卷。" : L" 部分卷恢复失败，请检查每个卷的状态。";
-            return false;
+            changed.push_back({index, previous});
+            volume.attributes = requested;
+            volume.readonly = desired;
         }
-        completed.push_back({index, previous});
-        volume.attributes = requested;
-        volume.readonly = desired;
-        ++steps;
-        if (progress) progress(steps, targets.size(), L"已处理 " + volume.mountPoints);
-    }
-    // Verify every selected GPT volume, including unchanged volumes, before
-    // accepting the disk-wide result.
-    for (const size_t index : targets) {
+        ++completed;
+        if (progress) progress(completed, total,
+                               L"正在复查卷持久属性 " + volume.mountPoints);
         std::wstring error;
-        auto handle = OpenVolume(disk.volumes[index].devicePath);
-        ULONGLONG attributes = 0;
-        if (!handle || !ReadAttributes(handle.get(), attributes, error) ||
-            (((attributes & kReadOnly) != 0) != desired)) {
-            summary = L"卷属性状态不一致：" + disk.volumes[index].mountPoints +
+        auto handle = OpenVolume(volume.devicePath);
+        ULONGLONG flags = 0;
+        if (!handle || !ReadAttributes(handle.get(), flags, error) ||
+            (((flags & kReadOnly) != 0) != desired)) {
+            summary = L"卷属性状态不一致：" + volume.mountPoints +
                       L"。请重新读取卷状态。";
             return false;
         }
-        disk.volumes[index].attributes = attributes;
-        disk.volumes[index].readonly = desired;
+        volume.attributes = flags;
+        volume.readonly = desired;
+        ++completed;
     }
-    if (progress) progress(targets.size(), targets.size() + 1, L"正在刷新文件系统并验证实际状态");
     std::vector<std::wstring> devices;
     for (const auto index : targets) devices.push_back(disk.volumes[index].devicePath);
     std::wstring refreshed;
-    const bool active = RefreshMountedState(disk.number, devices, desired, refreshed);
-    if (progress) progress(targets.size() + 1, targets.size() + 1,
+    const bool active = RefreshMountedState(disk.number, devices, desired, refreshed,
+        [&](size_t done, size_t steps, const std::wstring& stage) {
+            if (progress) progress(writing + done, total, stage);
+        });
+    if (progress) progress(writing + refreshing + 1, total,
                            active ? L"文件系统只读状态已验证" : L"需要重新插入 U 盘");
     summary = (desired ? L"选中 GPT 分区的持久只读标志已启用。" :
                           L"选中 GPT 分区的持久只读标志已解除。") + refreshed;
