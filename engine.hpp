@@ -42,7 +42,7 @@ bool WriteAttributes(const std::wstring& device, ULONGLONG attributes,
                      bool allVolumes, std::wstring& error);
 bool ReadMountedReadOnly(const std::wstring& volume, bool& readonly);
 bool RefreshMountedState(DWORD diskNumber, const std::vector<std::wstring>& volumeDevices,
-                         bool desiredReadOnly, std::wstring& detail);
+                         bool desiredReadOnly, std::wstring& detail, Progress progress = {});
 bool Discover(std::wstring& error);
 Disk* SourceDisk();
 bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progress progress = {});
