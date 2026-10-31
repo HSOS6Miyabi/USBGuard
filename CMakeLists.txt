@@ -53,5 +53,12 @@ endif()
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(BUILD_TESTING AND Python3_Interpreter_FOUND)
-    add_test(NAME source_and_resources COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/inspect_source.py)
+    if(WIN32)
+        add_test(NAME source_and_resources COMMAND ${Python3_EXECUTABLE}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/inspect_source.py
+                 "${ICON_OUTPUT_DIR}/usb-guard.ico")
+    else()
+        add_test(NAME source_and_resources COMMAND ${Python3_EXECUTABLE}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/inspect_source.py)
+    endif()
 endif()
