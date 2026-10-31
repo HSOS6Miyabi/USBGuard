@@ -28,15 +28,28 @@ void CopyPacketText(Packet& p, const std::wstring& text) {
 // CheckTokenMembership is available on XP and distinguishes an elevated
 // administrator token from a filtered token on newer Windows.
 bool Elevated() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+    // TokenElevation (20) is supported on Vista and newer. XP's SDK does not
+    // define this information class, so use the numeric ABI value dynamically.
+    struct ElevationInfo { DWORD tokenIsElevated; } elevation{};
+    DWORD returned = 0;
+    const BOOL modern = GetTokenInformation(
+        token, static_cast<TOKEN_INFORMATION_CLASS>(20),
+        &elevation, sizeof(elevation), &returned);
+    CloseHandle(token);
+    if (modern) return elevation.tokenIsElevated != 0;
+
+    // XP fallback: the caller's enabled Administrators group membership.
     SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
     PSID adminSid = nullptr;
     if (!AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID,
                                   DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0,
                                   &adminSid)) return false;
     BOOL member = FALSE;
-    const BOOL ok = CheckTokenMembership(nullptr, adminSid, &member);
+    const BOOL checked = CheckTokenMembership(nullptr, adminSid, &member);
     FreeSid(adminSid);
-    return ok && member;
+    return checked && member;
 }
 
 bool VerifyNamedPipePeer(HANDLE pipe, HANDLE worker) {
