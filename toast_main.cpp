@@ -3,15 +3,228 @@
 #include "command.hpp"
 #include <windows.h>
 #include <shellapi.h>
-#include <sddl.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <propkey.h>
+#include <propsys.h>
+#include <wrl/client.h>
+#include <roapi.h>
+#include <winstring.h>
+#include <windows.ui.notifications.h>
+#include <windows.foundation.collections.h>
+#include <windows.data.xml.dom.h>
+#include <commctrl.h>
 #include <algorithm>
 #include <iterator>
+#include <sddl.h>
 #include <string>
+#include <vector>
 
-// Notification-area balloons need no Start-menu identity or per-user registration.
-// Windows 10/11 may render these notifications as system banners.
+// Windows Runtime APIs are loaded at execution time so the same executable starts on Windows 7.
 namespace {
+using Microsoft::WRL::ComPtr;
+namespace N = ABI::Windows::UI::Notifications;
+namespace X = ABI::Windows::Data::Xml::Dom;
+using Map = ABI::Windows::Foundation::Collections::IMap<HSTRING, HSTRING>;
+constexpr wchar_t NOTIFICATION_TAG[] = L"diskstate";
 constexpr int MAIN_ICON = 101;
+
+struct Rt {
+    HMODULE dll = nullptr;
+    decltype(&RoInitialize) initialize = nullptr;
+    decltype(&RoUninitialize) uninitialize = nullptr;
+    decltype(&RoGetActivationFactory) factory = nullptr;
+    decltype(&RoActivateInstance) activate = nullptr;
+    decltype(&WindowsCreateString) createString = nullptr;
+    decltype(&WindowsDeleteString) deleteString = nullptr;
+    bool initialized = false;
+    bool Load() {
+        dll = LoadLibraryW(L"combase.dll");
+        if (!dll) return false;
+        initialize = reinterpret_cast<decltype(initialize)>(GetProcAddress(dll, "RoInitialize"));
+        uninitialize = reinterpret_cast<decltype(uninitialize)>(GetProcAddress(dll, "RoUninitialize"));
+        factory = reinterpret_cast<decltype(factory)>(GetProcAddress(dll, "RoGetActivationFactory"));
+        activate = reinterpret_cast<decltype(activate)>(GetProcAddress(dll, "RoActivateInstance"));
+        createString = reinterpret_cast<decltype(createString)>(GetProcAddress(dll, "WindowsCreateString"));
+        deleteString = reinterpret_cast<decltype(deleteString)>(GetProcAddress(dll, "WindowsDeleteString"));
+        if (!initialize || !uninitialize || !factory || !activate || !createString || !deleteString)
+            return false;
+        const HRESULT hr = initialize(RO_INIT_SINGLETHREADED);
+        initialized = SUCCEEDED(hr);
+        return initialized;
+    }
+    ~Rt() {
+        if (initialized) uninitialize();
+        if (dll) FreeLibrary(dll);
+    }
+};
+struct HStr {
+    Rt& rt;
+    HSTRING raw = nullptr;
+    HStr(Rt& r, const std::wstring& text) : rt(r) {
+        if (!text.empty()) rt.createString(text.c_str(), static_cast<UINT32>(text.size()), &raw);
+    }
+    HStr(Rt& r, const wchar_t* text) : HStr(r, std::wstring(text)) {}
+    HStr(const HStr&) = delete;
+    HStr& operator=(const HStr&) = delete;
+    ~HStr() { if (raw) rt.deleteString(raw); }
+};
+DWORD WindowsBuild() {
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) return 0;
+    using VersionFn = LONG(WINAPI*)(OSVERSIONINFOW*);
+    auto function = reinterpret_cast<VersionFn>(GetProcAddress(ntdll, "RtlGetVersion"));
+    OSVERSIONINFOW v{}; v.dwOSVersionInfoSize = sizeof(v);
+    if (!function || function(&v) != 0) return 0;
+    return v.dwMajorVersion >= 10 ? v.dwBuildNumber : (v.dwMajorVersion * 100 + v.dwMinorVersion);
+}
+std::wstring XmlEscape(const std::wstring& input) {
+    std::wstring result; result.reserve(input.size());
+    for (wchar_t c : input) {
+        switch (c) {
+            case L'&': result += L"&amp;"; break;
+            case L'<': result += L"&lt;"; break;
+            case L'>': result += L"&gt;"; break;
+            case L'\'': result += L"&apos;"; break;
+            case L'\"': result += L"&quot;"; break;
+            default: if (c >= 0x20 || c == L'\n' || c == L'\t') result += c;
+        }
+    }
+    return result;
+}
+
+// A unique shortcut exists only while this process publishes notifications.
+// Keeping ownership inside the object also removes the file when setup fails.
+struct TemporaryNotificationIdentity {
+    std::wstring shortcutPath;
+    std::wstring appId;
+
+    bool Create() {
+        wchar_t exe[32768]{};
+        const DWORD length = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
+        if (!length || length >= std::size(exe)) return false;
+        GUID uuid{};
+        if (FAILED(CoCreateGuid(&uuid))) return false;
+        wchar_t guid[40]{};
+        if (!StringFromGUID2(uuid, guid, static_cast<int>(std::size(guid)))) return false;
+        std::wstring token;
+        for (wchar_t c : guid) {
+            if ((c >= L'0' && c <= L'9') || (c >= L'A' && c <= L'F') ||
+                (c >= L'a' && c <= L'f')) token += c;
+        }
+        if (token.size() != 32) return false;
+        appId = L"USBGuard.Session." + token;
+        PWSTR folder = nullptr;
+        if (FAILED(SHGetKnownFolderPath(FOLDERID_Programs, 0, nullptr, &folder))) return false;
+        shortcutPath = folder;
+        CoTaskMemFree(folder);
+        shortcutPath += L"\\USBGuard-Session-" + token + L".lnk";
+        // Never overwrite an existing file, even if the generated identity collides.
+        if (GetFileAttributesW(shortcutPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            shortcutPath.clear();
+            return false;
+        }
+        ComPtr<IShellLinkW> link;
+        if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(&link))) || FAILED(link->SetPath(exe)) ||
+            FAILED(link->SetDescription(L"USB Guard 临时进度通知"))) return false;
+        ComPtr<IPropertyStore> store;
+        if (FAILED(link.As(&store))) return false;
+        PROPVARIANT value{};
+        value.vt = VT_LPWSTR;
+        value.pwszVal = const_cast<PWSTR>(appId.c_str());
+        if (FAILED(store->SetValue(PKEY_AppUserModel_ID, value)) ||
+            FAILED(store->Commit())) return false;
+        ComPtr<IPersistFile> file;
+        if (FAILED(link.As(&file)) || FAILED(file->Save(shortcutPath.c_str(), TRUE))) return false;
+        return SUCCEEDED(SetCurrentProcessExplicitAppUserModelID(appId.c_str()));
+    }
+    ~TemporaryNotificationIdentity() {
+        if (!shortcutPath.empty()) DeleteFileW(shortcutPath.c_str());
+    }
+};
+
+struct NativeToast {
+    TemporaryNotificationIdentity identity;
+    Rt runtime;
+    ComPtr<N::IToastNotifier> notifier;
+    bool available = false;
+    bool progressCapable = false;
+    unsigned sequence = 1;
+
+    bool Setup(DWORD build) {
+        if (build < 602 || !runtime.Load()) return false;
+        if (!identity.Create()) return false;
+        HStr className(runtime, RuntimeClass_Windows_UI_Notifications_ToastNotificationManager);
+        HStr appId(runtime, identity.appId);
+        ComPtr<N::IToastNotificationManagerStatics> manager;
+        if (FAILED(runtime.factory(className.raw, IID_PPV_ARGS(&manager))) ||
+            FAILED(manager->CreateToastNotifierWithId(appId.raw, &notifier))) return false;
+        available = true;
+        progressCapable = build >= 15063;
+        return true;
+    }
+    bool CreateData(double fraction, const std::wstring& stage, ComPtr<N::INotificationData>& output) {
+        HStr name(runtime, RuntimeClass_Windows_UI_Notifications_NotificationData);
+        ComPtr<IInspectable> instance;
+        if (FAILED(runtime.activate(name.raw, instance.GetAddressOf())) || FAILED(instance.As(&output))) return false;
+        ComPtr<Map> values;
+        if (FAILED(output->get_Values(&values))) return false;
+        HStr keyValue(runtime, L"progressValue"), value(runtime, std::to_wstring(fraction));
+        HStr keyStatus(runtime, L"progressStatus"), status(runtime, stage);
+        boolean replaced = false;
+        if (FAILED(values->Insert(keyValue.raw, value.raw, &replaced)) ||
+            FAILED(values->Insert(keyStatus.raw, status.raw, &replaced))) return false;
+        return SUCCEEDED(output->put_SequenceNumber(sequence++));
+    }
+    bool Show(const std::wstring& title, const std::wstring& details, bool showProgress) {
+        if (!available) return false;
+        std::wstring xml;
+        if (progressCapable) {
+            xml = L"<toast duration='short' launch='--notification-open'><visual><binding template='ToastGeneric'>"
+                  L"<text>" + XmlEscape(title) + L"</text><text>" + XmlEscape(details) + L"</text>";
+            if (showProgress) xml += L"<progress title='U 盘写保护操作' value='{progressValue}' status='{progressStatus}'/>";
+            xml += L"</binding></visual></toast>";
+        } else {
+            xml = L"<toast launch='--notification-open'><visual><binding template='ToastText02'><text id='1'>" + XmlEscape(title) +
+                  L"</text><text id='2'>" + XmlEscape(details) + L"</text></binding></visual></toast>";
+        }
+        HStr xmlClass(runtime, RuntimeClass_Windows_Data_Xml_Dom_XmlDocument), xmlText(runtime, xml);
+        ComPtr<IInspectable> instance;
+        if (FAILED(runtime.activate(xmlClass.raw, instance.GetAddressOf()))) return false;
+        ComPtr<X::IXmlDocument> doc;
+        ComPtr<X::IXmlDocumentIO> docIo;
+        if (FAILED(instance.As(&doc)) || FAILED(instance.As(&docIo)) ||
+            FAILED(docIo->LoadXml(xmlText.raw))) return false;
+        HStr toastClass(runtime, RuntimeClass_Windows_UI_Notifications_ToastNotification);
+        ComPtr<N::IToastNotificationFactory> factory;
+        if (FAILED(runtime.factory(toastClass.raw, IID_PPV_ARGS(&factory)))) return false;
+        ComPtr<N::IToastNotification> toast;
+        if (FAILED(factory->CreateToastNotification(doc.Get(), &toast))) return false;
+        if (progressCapable) {
+            ComPtr<N::IToastNotification2> tagged;
+            HStr tag(runtime, NOTIFICATION_TAG);
+            if (FAILED(toast.As(&tagged)) || FAILED(tagged->put_Tag(tag.raw))) return false;
+            if (showProgress) {
+                ComPtr<N::IToastNotification4> dataToast;
+                ComPtr<N::INotificationData> data;
+                if (FAILED(toast.As(&dataToast)) || !CreateData(0, L"开始处理……", data) ||
+                    FAILED(dataToast->put_Data(data.Get()))) return false;
+            }
+        }
+        return SUCCEEDED(notifier->Show(toast.Get()));
+    }
+    bool Update(size_t done, size_t total, const std::wstring& stage) {
+        if (!available || !progressCapable) return false;
+        ComPtr<N::IToastNotifier2> updater;
+        if (FAILED(notifier.As(&updater))) return false;
+        ComPtr<N::INotificationData> data;
+        if (!CreateData(total ? static_cast<double>(done) / total : 0, stage, data)) return false;
+        HStr tag(runtime, NOTIFICATION_TAG);
+        N::NotificationUpdateResult result{};
+        return SUCCEEDED(updater->UpdateWithTag(data.Get(), tag.raw, &result));
+    }
+};
 
 // Windows 7 uses the old system notification-area balloon. An icon has to exist
 // for Shell_NotifyIcon; it is deleted before the program exits.
@@ -211,19 +424,33 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         bool initialized = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
         ~ComScope() { if (initialized) CoUninitialize(); }
     } com;
+    const DWORD build = WindowsBuild();
+    NativeToast toast;
+    bool modern = toast.Setup(build);
     Balloon balloon;
-    balloon.Start();
-    balloon.Tell(L"USB Guard 正在处理", L"正在识别 U 盘并检查持久只读属性");
-    size_t previous = static_cast<size_t>(-1);
+    if (!modern) balloon.Start();
+    const std::wstring doing = L"正在识别 U 盘并检查持久只读属性";
+    if (modern) {
+        if (!toast.Show(L"USB Guard 正在处理", doing, true)) {
+            modern = false;
+            balloon.Start();
+        }
+    }
+    if (!modern) balloon.Tell(L"USB Guard 正在处理", doing);
     auto result = LaunchWorker(action, [&](size_t done, size_t total, const std::wstring& stage) {
-        if (done == previous) return;
-        previous = done;
-        const unsigned percent = total ? static_cast<unsigned>(100 * done / total) : 0;
-        balloon.Tell(L"USB Guard 正在处理", std::to_wstring(percent) + L"% · " + stage);
+        if (modern) toast.Update(done, total, stage);
+        else if (total) {
+            const unsigned pct = static_cast<unsigned>(100 * done / total);
+            balloon.Tell(L"USB Guard 正在处理", std::to_wstring(pct) + L"% · " + stage);
+        }
     });
     const bool success = result.exitCode == 0;
     const std::wstring title = success ? L"USB Guard 操作完成" : L"USB Guard 操作失败";
-    balloon.Tell(title, result.message, !success);
+    if (modern) {
+        if (!toast.Show(title, result.message, false)) {
+            balloon.Start(); balloon.Tell(title, result.message, !success);
+        }
+    } else balloon.Tell(title, result.message, !success);
     usb::WriteConsoleLine(result.message);
     return result.exitCode;
 }
