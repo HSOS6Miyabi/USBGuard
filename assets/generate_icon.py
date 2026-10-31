@@ -87,8 +87,8 @@ def png_chunk(kind, data):
 
 def encode_png(size, pixels):
     stride = size * 4
-    scanlines = b''.join(b'\\x00' + pixels[row * stride:(row + 1) * stride] for row in range(size))
-    return (b'\\x89PNG\\r\\n\\x1a\\n'
+    scanlines = b''.join(b'\x00' + pixels[row * stride:(row + 1) * stride] for row in range(size))
+    return (b'\x89PNG\r\n\x1a\n'
             + png_chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 6, 0, 0, 0))
             + png_chunk(b'IDAT', zlib.compress(scanlines, 9))
             + png_chunk(b'IEND', b''))
