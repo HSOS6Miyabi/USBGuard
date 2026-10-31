@@ -454,6 +454,24 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         action = argc == 2 ? policy::ParseAction(argv[1]) : policy::Action::Invalid;
     }
     if (argv) LocalFree(argv);
+    // One notification operation per logon session prevents concurrent toggles,
+    // duplicate notifications and cross-run cleanup of an active Toast.
+    HANDLE singleInstance = CreateMutexW(nullptr, TRUE, L"Local\\USBGuardToast.SingleOperation");
+    if (!singleInstance) return 4;
+    const DWORD mutexStatus = GetLastError();
+    if (mutexStatus == ERROR_ALREADY_EXISTS) {
+        CloseHandle(singleInstance);
+        return 0;
+    }
+    struct SessionGuard {
+        HANDLE mutex = nullptr;
+        ~SessionGuard() {
+            if (mutex) {
+                ReleaseMutex(mutex);
+                CloseHandle(mutex);
+            }
+        }
+    } sessionGuard{singleInstance};
     struct ComScope {
         bool initialized = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
         ~ComScope() { if (initialized) CoUninitialize(); }
