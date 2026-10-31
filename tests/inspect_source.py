@@ -85,6 +85,16 @@ assert reserved == 0 and kind == 1 and count >= 4
 sizes = set()
 for i in range(count):
     width, height = struct.unpack_from('<BB', ico, 6 + i * 16)
-    sizes.add((width or 256, height or 256))
+    actual_size = width or 256
+    sizes.add((actual_size, height or 256))
+    image_length, image_offset = struct.unpack_from('<II', ico, 6 + i * 16 + 8)
+    assert image_offset + image_length <= len(ico)
+    image = ico[image_offset:image_offset + image_length]
+    if actual_size <= 48:
+        assert struct.unpack_from('<I', image)[0] == 40, 'Legacy icons must use a DIB'
+        dib_height = struct.unpack_from('<i', image, 8)[0]
+        assert dib_height == 2 * actual_size
+    if actual_size == 256:
+        assert image.startswith(b'\\x89PNG\\r\\n\\x1a\\n')
 assert {(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)} <= sizes
 print('Source, manifest and icon checks passed')
