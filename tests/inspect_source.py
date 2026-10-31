@@ -7,46 +7,42 @@ import xml.etree.ElementTree as ET
 
 root = Path(__file__).resolve().parents[1]
 engine = (root / 'engine.cpp').read_text(encoding='utf-8')
-toast = (root / 'toast_main.cpp').read_text(encoding='utf-8')
+mini = (root / 'mini_main.cpp').read_text(encoding='utf-8')
 ui = (root / 'ui_main.cpp').read_text(encoding='utf-8')
 cmake = (root / 'CMakeLists.txt').read_text(encoding='utf-8')
 
 assert 'IOCTL_VOLUME_SET_GPT_ATTRIBUTES' in engine
 assert 'RevertOnClose = FALSE' in engine
 assert 'ApplyToAllConnectedVolumes = allVolumes ? TRUE : FALSE' in engine
-assert 'IOCTL_DISK_SET_DISK_ATTRIBUTES' not in engine + toast + ui
+assert 'IOCTL_DISK_SET_DISK_ATTRIBUTES' not in engine + mini + ui
 assert 'IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS' in engine
 assert 'g_windowsDisks.count' in engine
 assert 'PBM_SETPOS' in ui and 'LVS_EX_CHECKBOXES' in ui
-assert 'Shell_NotifyIconW' in toast and 'NIM_DELETE' in toast
-assert 'TemporaryNotificationIdentity' in toast
-assert 'FOLDERID_Programs' in toast and 'PKEY_AppUserModel_ID' in toast
-assert 'DeleteFileW(shortcutPath.c_str())' in toast
-assert 'PortableUSBGuard.Notifications' in toast and 'CoCreateGuid' in toast
-assert 'ClearWithId(appId.raw)' in toast
-assert 'history->Remove(tag.raw)' in toast
-assert toast.count('history->Remove(tag.raw)') == 2
-assert 'UpdateWithTag' in toast and 'NotificationNotFound' in toast
-assert 'if (!modern && build < 15063) balloon.Start();' in toast
-assert 'balloon.Tell(L"USB Guard 正在处理"' not in toast
-assert 'toast.Finish(title, result.message)' in toast
-assert toast.count('balloon.Tell(') == 2
-assert toast.count('toast.Show(L"USB Guard 需要管理员权限"') == 1
-assert 'NativeToast' in toast and 'progressStarted' in toast
-assert 'CreateMutexW(' in toast and 'USBGuardToast.SingleOperation' in toast
-assert 'ERROR_ALREADY_EXISTS' in toast and 'ReleaseMutex(' in toast
-assert 'UpdateWithTag' in toast and 'progressValue' in toast
-assert 'RegCreateKey' not in toast and 'RegSetValue' not in toast
-assert 'L"USB Guard 需要管理员权限"' in toast
-assert '请在 Windows 用户账户控制对话框中点击“是”' in toast
-assert toast.index('toast.Show(L"USB Guard 需要管理员权限"') < toast.index('auto result = LaunchWorker(')
-assert 'Sleep(' not in toast
-assert '<actions>' not in toast
-assert 'ShellExecuteExW' in toast and 'GetNamedPipeClientProcessId' in toast
-assert 'WaitForSingleObject(launch.hProcess' in toast
-assert 'USBGuardToast' in cmake and 'USBGuardUI' in cmake
+assert 'GetNamedPipeClientProcessId' in mini
+assert 'ShellExecuteExW' in mini
+assert 'L"runas"' in mini
+assert 'WaitForSingleObject(launch.hProcess' in mini
+assert 'CreateMutexW(' in mini and 'USBGuardMini.SingleOperation' in mini
+assert 'WS_EX_TOPMOST' in mini and 'MonitorFromWindow' in mini
+assert 'SW_SHOWNOACTIVATE' in mini and 'SetWindowPos' in mini
+assert 'WM_PAINT' in mini and 'BitBlt' in mini and 'RoundRect' in mini
+assert 'kProgressMessage' in mini and 'kFinishedMessage' in mini
+assert 'PostMessageW(window,kProgressMessage' in mini
+assert 'PostMessageW(window,kFinishedMessage' in mini
+assert 'std::thread' in mini and 'g_ui.worker.join()' in mini
+assert 'GetTickCount64()' in mini and 'kFinishDurationMs = 4200' in mini
+assert 'DestroyWindow(window)' in mini
+assert '--ui-self-test' in mini and 'mini_ui_smoke' in cmake
+assert 'USBGuardMini' in cmake and 'USBGuardUI' in cmake
+assert 'RegCreateKey' not in mini and 'RegSetValue' not in mini
+assert 'Shell_NotifyIcon' not in mini
+assert 'ToastNotification' not in mini
+assert 'AppUserModelID' not in mini
+assert 'CreateShortcut' not in mini
+assert 'RoInitialize' not in mini
+assert 'Sleep(' not in mini
 
-for name, level in [('app.manifest', 'requireAdministrator'), ('toast.manifest', 'asInvoker')]:
+for name, level in [('app.manifest', 'requireAdministrator'), ('mini.manifest', 'asInvoker')]:
     parsed = ET.parse(root / name)
     actual = [e.attrib['level'] for e in parsed.iter() if e.tag.endswith('requestedExecutionLevel')]
     assert actual == [level], (name, actual)
