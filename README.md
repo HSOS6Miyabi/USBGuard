@@ -1,6 +1,14 @@
 # USB Guard
 
-便携式 Windows U 盘写保护程序。使用 C++17、原生 Win32 API 和 Windows SDK 开发。发布的可执行文件不依赖第三方运行框架。
+跨平台 U 盘写保护工具，提供 Windows 和 Linux 两种版本。Windows 版使用 C++17、原生 Win32 API 和 Windows SDK，发布的 EXE 不依赖第三方运行框架。
+
+## Linux 版本
+
+Linux 版提供 `USBGuardLinux` GTK 3 图形界面及 `USBGuardLinuxCLI` 命令行程序，支持 x86_64 和 aarch64。图形版兼容使用 X11、Wayland 或 Xwayland 的桌面环境及窗口管理器；不需要特定桌面环境的托盘、通知或其他专有接口。它通过 `pkexec` 请求系统权限，在未配置图形授权代理的环境中可以使用 `sudo` 启动 CLI。
+
+Linux 版利用内核 `BLKROSET` 和重新挂载实现当前连接期间的只读保护，**拔出再插入后不会自动保留**；它不会修改磁盘分区表或在主机安装系统服务。请参阅 [Linux 使用说明](linux/README.md)，了解安装依赖、桌面兼容性和安全限制。
+
+## Windows 版本
 
 ## 两种界面
 
