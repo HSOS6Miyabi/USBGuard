@@ -22,7 +22,16 @@ assert 'Shell_NotifyIconW' in toast and 'NIM_DELETE' in toast
 assert 'TemporaryNotificationIdentity' in toast
 assert 'FOLDERID_Programs' in toast and 'PKEY_AppUserModel_ID' in toast
 assert 'DeleteFileW(shortcutPath.c_str())' in toast
-assert 'USBGuard.Session.' in toast and 'CoCreateGuid' in toast
+assert 'PortableUSBGuard.Notifications' in toast and 'CoCreateGuid' in toast
+assert 'ClearWithId(appId.raw)' in toast
+assert 'RemoveGroupedTagWithId' in toast
+assert 'UpdateWithTag' in toast and 'NotificationNotFound' in toast
+assert 'if (!modern && build < 15063) balloon.Start();' in toast
+assert 'balloon.Tell(L"USB Guard 正在处理"' not in toast
+assert 'toast.Finish(title, result.message)' in toast
+assert toast.count('balloon.Tell(') == 2
+assert toast.count('toast.Show(L"USB Guard 需要管理员权限"') == 1
+assert 'NativeToast' in toast and 'progressStarted' in toast
 assert 'UpdateWithTag' in toast and 'progressValue' in toast
 assert 'RegCreateKey' not in toast and 'RegSetValue' not in toast
 assert 'L"USB Guard 需要管理员权限"' in toast
