@@ -219,6 +219,9 @@ struct MiniState {
     bool finished = false;
     bool succeeded = false;
     bool smokeTest = false;
+    bool openedDirectory = false;
+    policy::Action requestedAction = policy::Action::Invalid;
+    std::wstring executableDirectory;
     ULONGLONG finishTick = 0;
     unsigned animation = 0;
     UINT dpi = 96;
@@ -233,6 +236,29 @@ struct MiniState {
 };
 
 MiniState g_ui;
+
+// Capture the EXE directory before any storage-volume dismount occurs.
+std::wstring ExecutableDirectory() {
+    std::vector<wchar_t> path(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (!length || length >= path.size()) return L"";
+    const std::wstring full(path.data(), length);
+    const size_t slash = full.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return L"";
+    return full.substr(0, slash + 1);
+}
+
+bool RestoreExplorerWindow(HWND owner) {
+    const std::wstring& directory = g_ui.executableDirectory;
+    if (directory.empty()) return false;
+    const DWORD attributes = GetFileAttributesW(directory.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
+        return false;
+    const HINSTANCE opened = ShellExecuteW(owner, L"open", directory.c_str(),
+                                           nullptr, nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(opened) > 32;
+}
+
 int Scale(int logical) {
     return MulDiv(logical, static_cast<int>(g_ui.dpi), 96);
 }
@@ -427,6 +453,15 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g_ui.succeeded=result->exitCode == 0;
         g_ui.heading=g_ui.succeeded ? L"操作已完成" : L"操作未完成";
         g_ui.details=std::move(result->text);
+        // Reopen only after a successful protection change. Keep the explorer
+        // operation in this unelevated process, never in the administrator worker.
+        if (g_ui.succeeded && !g_ui.smokeTest &&
+            g_ui.requestedAction != policy::Action::Status &&
+            !g_ui.openedDirectory) {
+            g_ui.openedDirectory = true;
+            if (!RestoreExplorerWindow(window))
+                g_ui.details += L"\n无法自动重新打开程序目录，请在资源管理器中手动打开。";
+        }
         g_ui.finishTick=CompatTickCount();
         KillTimer(window,kAnimationTimer);
         SetTimer(window,kCloseTimer,100,nullptr);
@@ -492,6 +527,8 @@ int RunMiniWindow(HINSTANCE instance,policy::Action action,bool smokeTest) {
         ReleaseDC(nullptr,screen);
     }
     g_ui.smokeTest=smokeTest;
+    g_ui.requestedAction=action;
+    g_ui.executableDirectory=ExecutableDirectory();
     CreateFonts();
     g_ui.icon=static_cast<HICON>(LoadImageW(instance,MAKEINTRESOURCEW(kIconResource),
                     IMAGE_ICON,Scale(42),Scale(42),LR_DEFAULTCOLOR));
