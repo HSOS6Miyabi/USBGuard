@@ -37,6 +37,18 @@ foreach(target IN ITEMS USBGuardUI USBGuardToast)
         target_compile_options(${target} PRIVATE -Wall -Wextra)
     endif()
 endforeach()
+# Integration executable is never packaged in Release. It is the only build that
+# can inspect file-backed virtual disks. Production applications only accept USB.
+if(BUILD_TESTING)
+    add_executable(storage_integration tests/storage_integration.cpp engine.cpp engine.hpp policy.hpp)
+    target_compile_features(storage_integration PRIVATE cxx_std_17)
+    target_include_directories(storage_integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(storage_integration PRIVATE USBGUARD_VIRTUAL_DISK_TEST
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0601 WINVER=0x0601)
+    if(MSVC)
+        target_compile_options(storage_integration PRIVATE /W4 /utf-8 /EHsc /permissive-)
+    endif()
+endif()
 # Runtime Windows Runtime entry points are dynamically resolved for Windows 7 compatibility.
 set_target_properties(USBGuardUI PROPERTIES OUTPUT_NAME "USBGuardUI")
 set_target_properties(USBGuardToast PROPERTIES OUTPUT_NAME "USBGuardToast")
