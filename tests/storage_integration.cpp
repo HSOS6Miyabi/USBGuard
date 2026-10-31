@@ -58,8 +58,8 @@ void Trace(const wchar_t* description, const std::wstring& detail) {
 }
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 4) {
-        std::wcerr << L"Usage: storage_integration <disk-number> <drive-letter> <MBR|GPT>\n";
+    if (argc != 4 && argc != 5) {
+        std::wcerr << L"Usage: storage_integration <disk-number> <drive-letter> <MBR|GPT> [second-GPT-drive]\n";
         return 2;
     }
     wchar_t* end = nullptr;
@@ -75,6 +75,13 @@ int wmain(int argc, wchar_t** argv) {
     const std::wstring restoredPath = root + L"usbguard-restored.tmp";
     const PARTITION_STYLE style = _wcsicmp(argv[3], L"GPT") == 0
         ? PARTITION_STYLE_GPT : PARTITION_STYLE_MBR;
+    const bool multiple = argc == 5 && style == PARTITION_STYLE_GPT;
+    if (argc == 5 && !multiple) return 2;
+    if (multiple && (wcslen(argv[4]) != 1 ||
+        !((argv[4][0] >= L'A' && argv[4][0] <= L'Z') ||
+          (argv[4][0] >= L'a' && argv[4][0] <= L'z')))) return 2;
+    const std::wstring secondRoot = multiple ? std::wstring(1, argv[4][0]) + L":\\" : L"";
+    if (multiple && _wcsicmp(secondRoot.c_str(), root.c_str()) == 0) return 2;
 
     // Never run this destructive test against a real USB or system disk.
     const std::wstring physical = L"\\\\.\\PhysicalDrive" + std::to_wstring(number);
@@ -110,12 +117,16 @@ int wmain(int argc, wchar_t** argv) {
         return 4;
     }
     bool foundExpectedRoot = false;
+    bool foundSecondRoot = !multiple;
     for (auto& volume : target->volumes) {
-        volume.selected = volume.mountPoints.find(root.substr(0, 2)) != std::wstring::npos;
-        if (volume.selected) foundExpectedRoot = true;
+        const bool first = volume.mountPoints.find(root) != std::wstring::npos;
+        const bool second = multiple && volume.mountPoints.find(secondRoot) != std::wstring::npos;
+        volume.selected = first || second;
+        foundExpectedRoot = foundExpectedRoot || first;
+        foundSecondRoot = foundSecondRoot || second;
     }
-    if (!foundExpectedRoot || (style == PARTITION_STYLE_MBR &&
-        target->volumes.size() != 1)) {
+    if (!foundExpectedRoot || !foundSecondRoot ||
+        (style == PARTITION_STYLE_MBR && target->volumes.size() != 1)) {
         std::wcerr << L"Required test volume is missing or disk layout unexpected\n";
         return 5;
     }
@@ -125,9 +136,24 @@ int wmain(int argc, wchar_t** argv) {
         Trace(L"Initial writable state could not be established", initial);
         return 6;
     }
-    if (!ProbeWrite(initialPath)) {
+    if (!ProbeWrite(initialPath) ||
+        (multiple && !ProbeWrite(secondRoot + L"usbguard-initial-2.tmp"))) {
         std::wcerr << L"Initial write and reopen verification failed\n";
         return 7;
+    }
+    bool firstOnlyOk = true;
+    if (multiple) {
+        // Establish an intentionally mixed GPT state: first volume readonly,
+        // second volume writable. Toggle must then protect *both* volumes.
+        for (auto& volume : target->volumes)
+            volume.selected = volume.mountPoints.find(root) != std::wstring::npos;
+        std::wstring partial;
+        firstOnlyOk = usb::ChangeDisk(*target, policy::Action::Protect, partial);
+        Trace(L"Partial protection", partial);
+        firstOnlyOk = firstOnlyOk && ProbeWrite(secondRoot + L"usbguard-mixed-writable.tmp");
+        for (auto& volume : target->volumes)
+            volume.selected = volume.mountPoints.find(root) != std::wstring::npos ||
+                              volume.mountPoints.find(secondRoot) != std::wstring::npos;
     }
     std::vector<std::wstring> phases;
     bool monotonic = true;
@@ -139,17 +165,27 @@ int wmain(int argc, wchar_t** argv) {
         std::wcout << L"PROGRESS " << done << L"/" << total << L" " << stage << std::endl;
     };
     std::wstring protectedResult;
-    bool protectedOk = usb::ChangeDisk(*target, policy::Action::Protect, protectedResult, progress);
+    bool protectedOk = usb::ChangeDisk(*target,
+        multiple ? policy::Action::Toggle : policy::Action::Protect,
+        protectedResult, progress);
     Trace(L"Protect", protectedResult);
     bool actualReadOnly = false;
     bool statusKnown = false;
-    for (const auto& volume : target->volumes) if (volume.selected)
-        statusKnown = usb::ReadMountedReadOnly(volume.devicePath, actualReadOnly);
-    const bool correctlyBlocked = RejectWriteWhileProtected(blockedPath);
+    statusKnown = true;
+    actualReadOnly = true;
+    for (const auto& volume : target->volumes) if (volume.selected) {
+        bool readonly = false;
+        const bool readable = usb::ReadMountedReadOnly(volume.devicePath, readonly);
+        statusKnown = statusKnown && readable;
+        actualReadOnly = actualReadOnly && readonly;
+    }
+    const bool correctlyBlocked = RejectWriteWhileProtected(blockedPath) &&
+        (!multiple || RejectWriteWhileProtected(secondRoot + L"usbguard-protected-2.tmp"));
     std::wstring restoredResult;
     bool restoredOk = usb::ChangeDisk(*target, policy::Action::Unprotect, restoredResult);
     Trace(L"Unprotect", restoredResult);
-    bool writableAgain = restoredOk && ProbeWrite(restoredPath);
+    bool writableAgain = restoredOk && ProbeWrite(restoredPath) &&
+        (!multiple || ProbeWrite(secondRoot + L"usbguard-restored-2.tmp"));
     const auto saw = [&](const wchar_t* stage) {
         return std::any_of(phases.begin(), phases.end(), [stage](const std::wstring& item) {
             return item.find(stage) != std::wstring::npos;
@@ -159,7 +195,7 @@ int wmain(int argc, wchar_t** argv) {
                                saw(L"正在强制卸载卷") &&
                                saw(L"正在重新挂载卷") &&
                                saw(L"正在验证卷只读状态");
-    if (!protectedOk || !statusKnown || !actualReadOnly ||
+    if (!firstOnlyOk || !protectedOk || !statusKnown || !actualReadOnly ||
         !correctlyBlocked || !writableAgain || !monotonic || !phaseCoverage) {
         std::wcerr << L"Read-only enforcement failed. protect=" << protectedOk
                    << L" mounted=" << statusKnown << L" readonly=" << actualReadOnly
