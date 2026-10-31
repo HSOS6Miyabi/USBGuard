@@ -18,13 +18,13 @@ if(WIN32)
 
     file(WRITE "${ICON_OUTPUT_DIR}/ui.generated.rc"
         "#include <winuser.h>\n101 ICON \"${ICON_OUTPUT_DIR}/usb-guard.ico\"\n1 RT_MANIFEST \"${CMAKE_CURRENT_SOURCE_DIR}/app.manifest\"\n")
-    file(WRITE "${ICON_OUTPUT_DIR}/toast.generated.rc"
-        "#include <winuser.h>\n101 ICON \"${ICON_OUTPUT_DIR}/usb-guard.ico\"\n1 RT_MANIFEST \"${CMAKE_CURRENT_SOURCE_DIR}/toast.manifest\"\n")
+    file(WRITE "${ICON_OUTPUT_DIR}/mini.generated.rc"
+        "#include <winuser.h>\n101 ICON \"${ICON_OUTPUT_DIR}/usb-guard.ico\"\n1 RT_MANIFEST \"${CMAKE_CURRENT_SOURCE_DIR}/mini.manifest\"\n")
 
 set(COMMON_SOURCES engine.cpp engine.hpp command.cpp command.hpp policy.hpp)
 add_executable(USBGuardUI WIN32 ui_main.cpp ${COMMON_SOURCES} "${ICON_OUTPUT_DIR}/ui.generated.rc")
-add_executable(USBGuardToast WIN32 toast_main.cpp ${COMMON_SOURCES} "${ICON_OUTPUT_DIR}/toast.generated.rc")
-foreach(target IN ITEMS USBGuardUI USBGuardToast)
+add_executable(USBGuardMini WIN32 mini_main.cpp ${COMMON_SOURCES} "${ICON_OUTPUT_DIR}/mini.generated.rc")
+foreach(target IN ITEMS USBGuardUI USBGuardMini)
     target_compile_features(${target} PRIVATE cxx_std_17)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(${target} PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0601 WINVER=0x0601)
@@ -49,14 +49,18 @@ if(BUILD_TESTING)
         target_compile_options(storage_integration PRIVATE /W4 /utf-8 /EHsc /permissive-)
     endif()
 endif()
-# Runtime Windows Runtime entry points are dynamically resolved for Windows 7 compatibility.
+# The compact window is implemented using native Win32 and GDI.
 set_target_properties(USBGuardUI PROPERTIES OUTPUT_NAME "USBGuardUI")
-set_target_properties(USBGuardToast PROPERTIES OUTPUT_NAME "USBGuardToast")
+set_target_properties(USBGuardMini PROPERTIES OUTPUT_NAME "USBGuardMini")
 else()
     message(STATUS "Non-Windows host: testing platform-independent logic only")
 endif()
 
 include(CTest)
+if(WIN32 AND BUILD_TESTING)
+    add_test(NAME mini_ui_smoke COMMAND $<TARGET_FILE:USBGuardMini> --ui-self-test)
+    set_tests_properties(mini_ui_smoke PROPERTIES TIMEOUT 20)
+endif()
 if(BUILD_TESTING)
     add_executable(policy_tests tests/policy_tests.cpp)
     target_compile_features(policy_tests PRIVATE cxx_std_17)
