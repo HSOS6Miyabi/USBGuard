@@ -43,7 +43,7 @@ jobs:
             if (!(Test-Path $installer)) { throw "Visual Studio Installer not found: $installer" }
             $arguments = 'modify --installPath "' + $installPath +
               '" --add Microsoft.VisualStudio.Component.VC.v141.x86.x64' +
-              ' --add Microsoft.VisualStudio.Component.WinXP --quiet --norestart'
+              ' --add Microsoft.VisualStudio.Component.WinXP --includeRecommended --quiet --norestart'
             $process = Start-Process -FilePath $installer -ArgumentList $arguments -PassThru
             try {
               Wait-Process -Id $process.Id -Timeout 630 -ErrorAction Stop
@@ -56,7 +56,19 @@ jobs:
               throw "Windows XP toolset installation failed (exit code $($process.ExitCode))"
             }
           }
+          $xpComponent = & $vswhere -all -products '*' -requires Microsoft.VisualStudio.Component.WinXP -property installationPath
+          Write-Host "Visual Studio instances reporting Windows XP component: $xpComponent"
           if (!(Test-Path $toolsetPath)) {
+            Write-Host "Searching alternate installed v141_xp toolset locations"
+            Get-ChildItem -LiteralPath (Join-Path $installPath 'MSBuild\Microsoft\VC') -Recurse -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -like 'v141*' } |
+              Select-Object -First 20 -ExpandProperty FullName | ForEach-Object { Write-Host $_ }
+            $logs = Get-ChildItem -Path $env:TEMP -Filter '*setup*log' -File -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 2
+            foreach ($log in $logs) {
+              Write-Host "Visual Studio Installer log: $($log.Name)"
+              Get-Content -LiteralPath $log.FullName -Tail 75 -ErrorAction SilentlyContinue
+            }
             throw "Windows XP toolset remains unavailable: $toolsetPath"
           }
       - name: Configure MSVC
