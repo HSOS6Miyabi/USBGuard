@@ -178,6 +178,9 @@ std::vector<Disk> Discover() {
             const std::string childDevice = "/dev/" + childName;
             struct stat st{};
             if (stat(childDevice.c_str(), &st) != 0 || !S_ISBLK(st.st_mode)) continue;
+            const std::string actual = FirstLine("/sys/class/block/" + childName + "/dev");
+            if (actual != std::to_string(major(st.st_rdev)) + ":" +
+                          std::to_string(minor(st.st_rdev))) continue;
             for (const auto& mounted : mounts) {
                 if (mounted.major != static_cast<unsigned>(major(st.st_rdev)) ||
                     mounted.minor != static_cast<unsigned>(minor(st.st_rdev))) continue;
@@ -191,7 +194,16 @@ std::vector<Disk> Discover() {
                 disk.volumes.push_back(std::move(volume));
             }
         }
-        if (!disk.volumes.empty()) disks.push_back(std::move(disk));
+        // A Linux installation can boot from an actual USB disk. Never
+        // change protection on a disk that holds live system filesystems.
+        const auto critical = [](const std::string& mount) {
+            return mount == "/" || mount == "/boot" || mount == "/boot/efi" ||
+                   mount == "/usr" || mount == "/var" || mount == "/home" ||
+                   mount == "/run";
+        };
+        const bool systemMedia = std::any_of(disk.volumes.begin(),disk.volumes.end(),
+            [&](const Volume& volume){return critical(volume.mountpoint);});
+        if (!disk.volumes.empty() && !systemMedia) disks.push_back(std::move(disk));
     }
     std::sort(disks.begin(),disks.end(),[](const auto& a,const auto& b){return a.device<b.device;});
     return disks;
