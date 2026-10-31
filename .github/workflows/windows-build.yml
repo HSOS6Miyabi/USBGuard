@@ -185,7 +185,7 @@ jobs:
     name: Publish verified binaries
     if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
     needs: [build, linux]
-    runs-on: windows-2022
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
@@ -194,47 +194,33 @@ jobs:
           pattern: USBGuard-*
           path: release-assets
           merge-multiple: true
-      - name: Prepare checksums and release version
+      - name: Verify assets and calculate SHA-256 checksums
         id: info
-        shell: pwsh
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:GITHUB_REF_TYPE -eq 'tag') { $tag = $env:GITHUB_REF_NAME }
-          else { $tag = "v1.1.$env:GITHUB_RUN_NUMBER" }
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          $files = @(Get-ChildItem release-assets -File | Where-Object {
-            $_.Extension -in '.exe', '.zip', '.gz' -or $_.Name -match '^USBGuardLinux(CLI)?-(x86_64|aarch64)
-          $hashes = foreach ($f in $files) {
-            $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($f.Name)"
-          }
-          $hashes | Set-Content -Encoding ascii release-assets/SHA256SUMS.txt
-          python -c "from pathlib import Path; p=Path('release-assets'); assert len(list(p.glob('*.exe')))==6 and len(list(p.glob('*.zip')))==3 and len(list(p.glob('*.tar.gz')))==2 and len(list(p.glob('USBGuardLinux*')))==4"
-      - name: Publish GitHub Release after successful tests
-        shell: pwsh
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then tag="$GITHUB_REF_NAME"
+          else tag="v1.1.${GITHUB_RUN_NUMBER}"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          test "$(find release-assets -maxdepth 1 -name '*.exe' -type f | wc -l)" -eq 6
+          test "$(find release-assets -maxdepth 1 -name '*.zip' -type f | wc -l)" -eq 3
+          test "$(find release-assets -maxdepth 1 -name '*.tar.gz' -type f | wc -l)" -eq 2
+          test "$(find release-assets -maxdepth 1 -name 'USBGuardLinux*' -type f | wc -l)" -eq 4
+          (
+            cd release-assets
+            mapfile -d '' -t assets < <(find . -maxdepth 1 -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.tar.gz' -o -name 'USBGuardLinux*' \) -print0 | sort -z)
+            test "${#assets[@]}" -eq 15
+            for file in "${assets[@]}"; do sha256sum "${file#./}"; done
+          ) > release-assets/SHA256SUMS.txt
+      - name: Publish combined Windows and Linux release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = '${{ steps.info.outputs.tag }}'
-          $notes = "Windows (x86, x64, ARM64) and Linux (x86_64, aarch64) builds. Linux uses GTK3 on Wayland/X11 and includes a command-line tool. Linux read-only control applies only while the USB device remains connected; it does not persist through unplug/replug. SHA-256 checksums included."
-          $publish = @($files | ForEach-Object { $_.FullName }) + @((Resolve-Path release-assets/SHA256SUMS.txt).Path)
-          gh release create "$tag" $publish --repo "$env:GITHUB_REPOSITORY" --title "USBGuard $tag" --notes "$notes" --verify-tag=false
-
-          } | Sort-Object Name)
-          if ($files.Count -ne 15) { throw "Expected 9 Windows and 6 Linux files; found $($files.Count)." }
-          $hashes = foreach ($f in $files) {
-            $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($f.Name)"
-          }
-          $hashes | Set-Content -Encoding ascii release-assets/SHA256SUMS.txt
-          python -c "from pathlib import Path; p=Path('release-assets'); assert len(list(p.glob('*.exe')))==6 and len(list(p.glob('*.zip')))==3"
-      - name: Publish GitHub Release after successful tests
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = '${{ steps.info.outputs.tag }}'
-          $notes = "Windows portable builds for x86, x64 and ARM64. Both full UI and compact Mini editions. SHA-256 checksums in SHA256SUMS.txt. Hardware USB write-protection behavior requires physical-device testing."
-          gh release create "$tag" release-assets/*.exe release-assets/*.zip release-assets/SHA256SUMS.txt --repo "$env:GITHUB_REPOSITORY" --title "USBGuard $tag" --notes "$notes" --verify-tag=false
+          set -euo pipefail
+          mapfile -d '' -t assets < <(find release-assets -maxdepth 1 -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.tar.gz' -o -name 'USBGuardLinux*' \) -print0 | sort -z)
+          test "${#assets[@]}" -eq 15
+          gh release create "${{ steps.info.outputs.tag }}" "${assets[@]}" release-assets/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --title "USBGuard ${{ steps.info.outputs.tag }}" \
+            --notes "Windows x86/x64/ARM64 and Linux x86_64/aarch64. Linux GTK3 supports X11 and Wayland and includes a desktop-free CLI. Linux software protection lasts until USB disconnection. SHA-256 checksums included." \
+            --verify-tag=false
