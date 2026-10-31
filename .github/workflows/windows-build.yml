@@ -137,6 +137,8 @@ jobs:
         run: cmake --build build-linux --parallel 3
       - name: Run Linux unit tests, CLI checks, and Xvfb GUI smoke test
         run: ctest --test-dir build-linux --output-on-failure
+      - name: Test All-In-One archive builder
+        run: python3 -m unittest discover -s tests -p 'test_all_in_one.py'
       - name: Verify Linux GUI and CLI are built
         run: |
           test -x build-linux/linux/USBGuardLinux
@@ -189,11 +191,18 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: USBGuard-*
           path: release-assets
           merge-multiple: true
+      - name: Create and verify All-In-One archive
+        run: |
+          python3 -m unittest discover -s tests -p 'test_all_in_one.py'
+          python3 scripts/package_all_in_one.py \
+            release-assets release-assets/USBGuard-All-In-One.zip \
+            README.md linux/README.md
       - name: Verify assets and calculate SHA-256 checksums
         id: info
         shell: bash
@@ -203,13 +212,13 @@ jobs:
           else tag="v1.1.${GITHUB_RUN_NUMBER}"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           test "$(find release-assets -maxdepth 1 -name '*.exe' -type f | wc -l)" -eq 6
-          test "$(find release-assets -maxdepth 1 -name '*.zip' -type f | wc -l)" -eq 3
+          test "$(find release-assets -maxdepth 1 -name '*.zip' -type f | wc -l)" -eq 4
           test "$(find release-assets -maxdepth 1 -name '*.tar.gz' -type f | wc -l)" -eq 2
           test "$(find release-assets -maxdepth 1 -name 'USBGuardLinux*' -type f | wc -l)" -eq 4
           (
             cd release-assets
             mapfile -d '' -t assets < <(find . -maxdepth 1 -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.tar.gz' -o -name 'USBGuardLinux*' \) -print0 | sort -z)
-            test "${#assets[@]}" -eq 15
+            test "${#assets[@]}" -eq 16
             for file in "${assets[@]}"; do sha256sum "${file#./}"; done
           ) > release-assets/SHA256SUMS.txt
       - name: Publish combined Windows and Linux release
@@ -219,8 +228,8 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -d '' -t assets < <(find release-assets -maxdepth 1 -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.tar.gz' -o -name 'USBGuardLinux*' \) -print0 | sort -z)
-          test "${#assets[@]}" -eq 15
+          test "${#assets[@]}" -eq 16
           gh release create "${{ steps.info.outputs.tag }}" "${assets[@]}" release-assets/SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" --title "USBGuard ${{ steps.info.outputs.tag }}" \
-            --notes "Windows x86/x64/ARM64 and Linux x86_64/aarch64. Linux GTK3 supports X11 and Wayland and includes a desktop-free CLI. Linux software protection lasts until USB disconnection. SHA-256 checksums included." \
+            --notes "Windows (x86/x64/ARM64) and Linux (x86_64/aarch64) are available separately. USBGuard-All-In-One.zip contains all 10 executables and usage guides, organized by platform. Linux GTK3 supports X11 and Wayland; its read-only setting lasts until USB disconnection. SHA-256 checksums included." \
             --verify-tag=false
