@@ -429,17 +429,25 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     bool modern = toast.Setup(build);
     Balloon balloon;
     if (!modern) balloon.Start();
-    const std::wstring doing = L"正在识别 U 盘并检查持久只读属性";
+    // Publish the consent instruction before Windows displays its own UAC dialog.
+    // The notification is informational: UAC is the only confirmation required.
+    const std::wstring consent = L"请在 Windows 用户账户控制对话框中点击“是”，允许修改 U 盘写保护设置。";
     if (modern) {
-        if (!toast.Show(L"USB Guard 正在处理", doing, true)) {
+        if (!toast.Show(L"USB Guard 需要管理员权限", consent, false)) {
             modern = false;
             balloon.Start();
         }
     }
-    if (!modern) balloon.Tell(L"USB Guard 正在处理", doing);
+    if (!modern) balloon.Tell(L"USB Guard 需要管理员权限", consent);
+    bool progressStarted = false;
+    // ShellExecuteExW runs immediately from LaunchWorker, without a waiting period.
     auto result = LaunchWorker(action, [&](size_t done, size_t total, const std::wstring& stage) {
-        if (modern) toast.Update(done, total, stage);
-        else if (total) {
+        if (modern) {
+            if (!progressStarted) {
+                progressStarted = toast.Show(L"USB Guard 正在处理", stage, true);
+            }
+            if (progressStarted) toast.Update(done, total, stage);
+        } else if (total) {
             const unsigned pct = static_cast<unsigned>(100 * done / total);
             balloon.Tell(L"USB Guard 正在处理", std::to_wstring(pct) + L"% · " + stage);
         }
