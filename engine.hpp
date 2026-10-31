@@ -39,10 +39,16 @@ struct Volume {
     ULONGLONG attributes = 0;
     bool selected = true;
 };
+struct DiskIdentity {
+    DWORD mbrSignature = 0;
+    GUID gptDiskId{};
+    std::string serial;
+};
 struct Disk {
     DWORD number = 0;
     PARTITION_STYLE style = PARTITION_STYLE_RAW;
     ULONGLONG size = 0;
+    DiskIdentity identity;
     std::vector<Volume> volumes;
     bool sourceDisk = false;
 };
@@ -54,10 +60,10 @@ std::wstring ErrorText(DWORD error);
 // Persistent metadata and mounted filesystem state must be evaluated independently.
 // RefreshMountedState dismounts targeted volumes, including busy ones, and verifies remount.
 bool ReadAttributes(HANDLE handle, ULONGLONG& attributes, std::wstring& error);
-bool WriteAttributes(const std::wstring& device, ULONGLONG attributes,
-                     bool allVolumes, std::wstring& error);
+bool IsAllowedStorageBus(STORAGE_BUS_TYPE bus);
 bool ReadMountedReadOnly(const std::wstring& volume, bool& readonly);
-bool RefreshMountedState(DWORD diskNumber, const std::vector<std::wstring>& volumeDevices,
+bool RefreshMountedState(const Disk& disk, HANDLE physical,
+                         const std::vector<std::wstring>& volumeDevices,
                          bool desiredReadOnly, std::wstring& detail, Progress progress = {});
 bool Discover(std::wstring& error);
 Disk* SourceDisk();

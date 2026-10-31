@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cwchar>
+#include <cstring>
 #include <iterator>
 #include <utility>
 #include <memory>
@@ -117,41 +118,74 @@ void FindWindowsDisks() {
     }
 }
 
-bool DiskProperties(DWORD number, PARTITION_STYLE& style, ULONGLONG& size) {
-    auto handle = AutoHandle(CreateFileW(DiskPath(number).c_str(), GENERIC_READ,
-                                         kShare, nullptr, OPEN_EXISTING, 0, nullptr));
-    if (!handle) return false;
+bool IsAllowedStorageBus(STORAGE_BUS_TYPE bus) {
+#ifdef USBGUARD_VIRTUAL_DISK_TEST
+    return bus == BusTypeUsb || bus == BusTypeFileBackedVirtual ||
+           bus == BusTypeVirtual;
+#else
+    return bus == BusTypeUsb;
+#endif
+}
+
+bool DiskProperties(HANDLE physical, DWORD expectedNumber, PARTITION_STYLE& style,
+                    ULONGLONG& size, DiskIdentity& identity) {
+    if (!physical || physical == INVALID_HANDLE_VALUE) return false;
+    STORAGE_DEVICE_NUMBER deviceNumber{};
+    DWORD returned = 0;
+    if (!DeviceIoControl(physical, IOCTL_STORAGE_GET_DEVICE_NUMBER, nullptr, 0,
+                         &deviceNumber, sizeof(deviceNumber), &returned, nullptr) ||
+        returned < sizeof(deviceNumber) ||
+        deviceNumber.DeviceType != FILE_DEVICE_DISK ||
+        deviceNumber.DeviceNumber != expectedNumber) return false;
+
     STORAGE_PROPERTY_QUERY query{};
     query.PropertyId = StorageDeviceProperty;
     query.QueryType = PropertyStandardQuery;
     alignas(STORAGE_DEVICE_DESCRIPTOR) BYTE response[2048]{};
-    DWORD returned = 0;
-    if (!DeviceIoControl(handle.get(), IOCTL_STORAGE_QUERY_PROPERTY,
+    if (!DeviceIoControl(physical, IOCTL_STORAGE_QUERY_PROPERTY,
                          &query, sizeof(query), response, sizeof(response), &returned, nullptr) ||
         returned < offsetof(STORAGE_DEVICE_DESCRIPTOR, RawDeviceProperties)) return false;
-    auto* descriptor = reinterpret_cast<STORAGE_DEVICE_DESCRIPTOR*>(response);
-#ifdef USBGUARD_VIRTUAL_DISK_TEST
-    // Only the CI-only executable is permitted to exercise disposable virtual disks.
-    if (descriptor->BusType != BusTypeUsb &&
-        descriptor->BusType != BusTypeFileBackedVirtual &&
-        descriptor->BusType != BusTypeVirtual) return false;
-#else
-    if (descriptor->BusType != BusTypeUsb) return false;
-#endif
+    const auto* descriptor = reinterpret_cast<const STORAGE_DEVICE_DESCRIPTOR*>(response);
+    if (!IsAllowedStorageBus(descriptor->BusType)) return false;
+
+    DiskIdentity current{};
+    const DWORD serialOffset = descriptor->SerialNumberOffset;
+    if (serialOffset) {
+        if (serialOffset >= returned) return false;
+        const char* start = reinterpret_cast<const char*>(response + serialOffset);
+        const char* end = static_cast<const char*>(std::memchr(start, 0, returned - serialOffset));
+        if (!end) return false;
+        current.serial.assign(start, end);
+    }
 
     std::vector<BYTE> layoutBuffer(65536);
-    if (!DeviceIoControl(handle.get(), IOCTL_DISK_GET_DRIVE_LAYOUT_EX, nullptr, 0,
+    if (!DeviceIoControl(physical, IOCTL_DISK_GET_DRIVE_LAYOUT_EX, nullptr, 0,
                          layoutBuffer.data(), static_cast<DWORD>(layoutBuffer.size()),
-                         &returned, nullptr) || returned < offsetof(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry)) return false;
-    auto* layout = reinterpret_cast<DRIVE_LAYOUT_INFORMATION_EX*>(layoutBuffer.data());
+                         &returned, nullptr) ||
+        returned < offsetof(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry)) return false;
+    const auto* layout = reinterpret_cast<const DRIVE_LAYOUT_INFORMATION_EX*>(layoutBuffer.data());
     style = static_cast<PARTITION_STYLE>(layout->PartitionStyle);
     if (style != PARTITION_STYLE_MBR && style != PARTITION_STYLE_GPT) return false;
+    if (style == PARTITION_STYLE_MBR) current.mbrSignature = layout->Mbr.Signature;
+    else current.gptDiskId = layout->Gpt.DiskId;
 
     GET_LENGTH_INFORMATION length{};
-    if (!DeviceIoControl(handle.get(), IOCTL_DISK_GET_LENGTH_INFO, nullptr, 0,
+    if (!DeviceIoControl(physical, IOCTL_DISK_GET_LENGTH_INFO, nullptr, 0,
                          &length, sizeof(length), &returned, nullptr)) return false;
     size = static_cast<ULONGLONG>(length.Length.QuadPart);
+    identity = std::move(current);
     return true;
+}
+bool SameDiskIdentity(const Disk& expected, HANDLE physical) {
+    PARTITION_STYLE style = PARTITION_STYLE_RAW;
+    ULONGLONG size = 0;
+    DiskIdentity actual{};
+    if (!DiskProperties(physical, expected.number, style, size, actual) ||
+        style != expected.style || size != expected.size ||
+        actual.serial != expected.identity.serial) return false;
+    return style == PARTITION_STYLE_MBR
+        ? actual.mbrSignature == expected.identity.mbrSignature
+        : IsEqualGUID(actual.gptDiskId, expected.identity.gptDiskId) != FALSE;
 }
 
 std::wstring MountPoints(const std::wstring& volumeName) {
@@ -220,27 +254,20 @@ bool ReadAttributes(HANDLE handle, ULONGLONG& attributes, std::wstring& error) {
     return true;
 }
 
-bool WriteAttributes(const std::wstring& device, ULONGLONG attributes,
+bool WriteAttributes(HANDLE handle, ULONGLONG attributes,
                      bool allVolumes, std::wstring& error) {
-    // A read-only volume may reject GENERIC_WRITE on open. The volume IOCTL
-    // accepts a volume handle, so retry with read access when necessary.
-    auto handle = OpenVolume(device);
-    if (!handle) {
-        error = L"无法打开卷设备：" + ErrorText(GetLastError());
-        return false;
-    }
     VOLUME_SET_GPT_ATTRIBUTES_INFORMATION data{};
     data.GptAttributes = attributes;
     data.RevertOnClose = FALSE;
     data.ApplyToAllConnectedVolumes = allVolumes ? TRUE : FALSE;
     DWORD returned = 0;
-    if (!DeviceIoControl(handle.get(), IOCTL_VOLUME_SET_GPT_ATTRIBUTES,
+    if (!DeviceIoControl(handle, IOCTL_VOLUME_SET_GPT_ATTRIBUTES,
                          &data, sizeof(data), nullptr, 0, &returned, nullptr)) {
         error = L"写入持久卷属性失败：" + ErrorText(GetLastError());
         return false;
     }
     ULONGLONG after = 0;
-    if (!ReadAttributes(handle.get(), after, error)) return false;
+    if (!ReadAttributes(handle, after, error)) return false;
     if (((after ^ attributes) & kReadOnly) != 0) {
         error = L"卷属性复查失败：只读状态与请求不一致";
         return false;
@@ -264,7 +291,8 @@ bool ReadMountedReadOnly(const std::wstring& volume, bool& readonly) {
     return true;
 }
 
-bool RefreshMountedState(DWORD diskNumber, const std::vector<std::wstring>& volumeDevices,
+bool RefreshMountedState(const Disk& expected, HANDLE physical,
+                         const std::vector<std::wstring>& volumeDevices,
                          bool desiredReadOnly, std::wstring& detail, Progress progress) {
     const size_t total = 1 + volumeDevices.size() * 4;
     size_t completed = 0;
@@ -273,16 +301,22 @@ bool RefreshMountedState(DWORD diskNumber, const std::vector<std::wstring>& volu
     };
     report(L"正在刷新物理磁盘属性");
     DWORD bytes = 0;
-    auto disk = AutoHandle(CreateFileW(DiskPath(diskNumber).c_str(), GENERIC_READ,
-                                       kShare, nullptr, OPEN_EXISTING, 0, nullptr));
-    const bool diskUpdated = disk && DeviceIoControl(disk.get(), IOCTL_DISK_UPDATE_PROPERTIES,
-                                                     nullptr, 0, nullptr, 0, &bytes, nullptr);
+    if (!SameDiskIdentity(expected, physical)) {
+        detail = L"目标物理磁盘身份发生变化，已停止刷新。";
+        return false;
+    }
+    const bool diskUpdated = DeviceIoControl(physical, IOCTL_DISK_UPDATE_PROPERTIES,
+                                             nullptr, 0, nullptr, 0, &bytes, nullptr) != FALSE;
     const DWORD updateError = diskUpdated ? ERROR_SUCCESS : GetLastError();
     ++completed;
     report(L"磁盘属性刷新请求已完成");
     size_t unresolved = 0;
     std::wstring reasons;
     for (const auto& volume : volumeDevices) {
+        if (!SameDiskIdentity(expected, physical)) {
+            detail = L"目标物理磁盘身份发生变化，已停止卷刷新。";
+            return false;
+        }
         const std::wstring mountLabel = MountPoints(volume);
         const std::wstring label = HasDriveLetterMount(mountLabel) ? mountLabel : volume;
         bool dismounted = false;
@@ -302,6 +336,15 @@ bool RefreshMountedState(DWORD diskNumber, const std::vector<std::wstring>& volu
                 ++completed;
                 report(L"无法重新挂载卷 " + label);
             } else {
+                DWORD currentNumber = MAXDWORD;
+                std::wstring locationError;
+                if (!OneDiskExtent(handle.get(), currentNumber, locationError) ||
+                    currentNumber != expected.number ||
+                    !IsEligiblePartition(handle.get(), expected.style) ||
+                    !SameDiskIdentity(expected, physical)) {
+                    detail = L"卷的物理位置或磁盘身份发生变化，已停止刷新：" + label;
+                    return false;
+                }
                 report(L"正在请求卷独占访问 " + label);
                 // When a volume is busy, a dismount is still attempted.
                 const bool locked = DeviceIoControl(handle.get(), FSCTL_LOCK_VOLUME,
@@ -376,7 +419,11 @@ bool Discover(std::wstring& error) {
         if (!OneDiskExtent(handle.get(), diskNumber, tempError)) continue;
         PARTITION_STYLE style = PARTITION_STYLE_RAW;
         ULONGLONG diskSize = 0;
-        if (!DiskProperties(diskNumber, style, diskSize)) continue;
+        auto physical = AutoHandle(CreateFileW(DiskPath(diskNumber).c_str(), GENERIC_READ,
+                                               kShare, nullptr, OPEN_EXISTING, 0, nullptr));
+        DiskIdentity identity{};
+        if (!physical || !DiskProperties(physical.get(), diskNumber, style, diskSize, identity))
+            continue;
         if (g_windowsDisks.count(diskNumber) != 0) continue;
         if (!IsEligiblePartition(handle.get(), style)) continue;
         ULONGLONG attributes = 0;
@@ -389,6 +436,7 @@ bool Discover(std::wstring& error) {
             d.number = diskNumber;
             d.style = style;
             d.size = diskSize;
+            d.identity = identity;
             d.sourceDisk = diskNumber == g_executableDisk;
             g_disks.push_back(std::move(d));
             entry = std::prev(g_disks.end());
@@ -461,16 +509,41 @@ bool ReadSelectedAttributes(Disk& disk, std::vector<size_t>& targets,
     return true;
 }
 
+bool WriteAttributesChecked(const Disk& disk, HANDLE physical,
+                            const std::wstring& device, ULONGLONG attributes,
+                            bool allVolumes, std::wstring& error) {
+    auto volume = OpenVolume(device);
+    if (!volume) {
+        error = L"无法打开目标卷：" + ErrorText(GetLastError());
+        return false;
+    }
+    DWORD diskNumber = MAXDWORD;
+    if (!OneDiskExtent(volume.get(), diskNumber, error) ||
+        diskNumber != disk.number || !IsEligiblePartition(volume.get(), disk.style) ||
+        !HasDriveLetterMount(MountPoints(device)) ||
+        !SameDiskIdentity(disk, physical)) {
+        error = L"目标卷的物理位置或磁盘身份已改变，已拒绝写入。";
+        return false;
+    }
+    FindWindowsDisks();
+    if (g_windowsDisks.empty() || g_windowsDisks.count(disk.number) != 0) {
+        error = L"无法安全排除 Windows 所在磁盘，已拒绝写入。";
+        return false;
+    }
+    return WriteAttributes(volume.get(), attributes, allVolumes, error);
+}
+
 bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progress progress) {
-    if (disk.number == MAXDWORD || g_windowsDisks.count(disk.number) != 0) {
+    FindWindowsDisks();
+    if (disk.number == MAXDWORD || g_windowsDisks.empty() ||
+        g_windowsDisks.count(disk.number) != 0) {
         summary = L"禁止修改 Windows 所在磁盘。";
         return false;
     }
     // Re-check USB bus and partition type immediately before modifying the target.
-    PARTITION_STYLE currentStyle = PARTITION_STYLE_RAW;
-    ULONGLONG currentSize = 0;
-    if (!DiskProperties(disk.number, currentStyle, currentSize) ||
-        currentStyle != disk.style || currentSize != disk.size) {
+    auto physical = AutoHandle(CreateFileW(DiskPath(disk.number).c_str(), GENERIC_READ,
+                                            kShare, nullptr, OPEN_EXISTING, 0, nullptr));
+    if (!physical || !SameDiskIdentity(disk, physical.get())) {
         summary = L"目标设备已断开、改变或不再是受支持的 USB 磁盘。";
         return false;
     }
@@ -505,7 +578,7 @@ bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progre
         const size_t first = targets.front();
         const ULONGLONG requested = policy::ReplaceReadOnly(disk.volumes[first].attributes, desired);
         std::wstring error;
-        if (!WriteAttributes(disk.volumes[first].devicePath, requested, true, error)) {
+        if (!WriteAttributesChecked(disk, physical.get(), disk.volumes[first].devicePath, requested, true, error)) {
             summary = L"MBR 整盘持久属性操作失败：" + error;
             return false;
         }
@@ -528,7 +601,7 @@ bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progre
         std::vector<std::wstring> devices;
         for (const auto index : targets) devices.push_back(disk.volumes[index].devicePath);
         std::wstring refreshed;
-        const bool active = RefreshMountedState(disk.number, devices, desired, refreshed,
+        const bool active = RefreshMountedState(disk, physical.get(), devices, desired, refreshed,
             [&](size_t done, size_t steps, const std::wstring& stage) {
                 if (progress) progress(writing + done, total, stage);
             });
@@ -555,11 +628,11 @@ bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progre
             std::wstring error;
             if (progress) progress(completed, total,
                                    L"正在写入卷持久属性 " + volume.mountPoints);
-            if (!WriteAttributes(volume.devicePath, requested, false, error)) {
+            if (!WriteAttributesChecked(disk, physical.get(), volume.devicePath, requested, false, error)) {
                 bool restored = true;
                 for (auto it = changed.rbegin(); it != changed.rend(); ++it) {
                     std::wstring rollbackError;
-                    if (!WriteAttributes(disk.volumes[it->index].devicePath, it->flags, false, rollbackError))
+                    if (!WriteAttributesChecked(disk, physical.get(), disk.volumes[it->index].devicePath, it->flags, false, rollbackError))
                         restored = false;
                 }
                 summary = L"卷 " + volume.mountPoints + L" 操作失败：" + error;
@@ -590,7 +663,7 @@ bool ChangeDisk(Disk& disk, policy::Action action, std::wstring& summary, Progre
     std::vector<std::wstring> devices;
     for (const auto index : targets) devices.push_back(disk.volumes[index].devicePath);
     std::wstring refreshed;
-    const bool active = RefreshMountedState(disk.number, devices, desired, refreshed,
+    const bool active = RefreshMountedState(disk, physical.get(), devices, desired, refreshed,
         [&](size_t done, size_t steps, const std::wstring& stage) {
             if (progress) progress(writing + done, total, stage);
         });

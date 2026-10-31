@@ -10,12 +10,38 @@ engine = (root / 'engine.cpp').read_text(encoding='utf-8')
 mini = (root / 'mini_main.cpp').read_text(encoding='utf-8')
 ui = (root / 'ui_main.cpp').read_text(encoding='utf-8')
 cmake = (root / 'CMakeLists.txt').read_text(encoding='utf-8')
+linux_core = (root / 'linux' / 'core.cpp').read_text(encoding='utf-8')
+linux_header = (root / 'linux' / 'core.hpp').read_text(encoding='utf-8')
+linux_tests = (root / 'linux' / 'tests.cpp').read_text(encoding='utf-8')
 
 assert 'IOCTL_VOLUME_SET_GPT_ATTRIBUTES' in engine
 assert 'RevertOnClose = FALSE' in engine
 assert 'ApplyToAllConnectedVolumes = allVolumes ? TRUE : FALSE' in engine
 assert 'IOCTL_DISK_SET_DISK_ATTRIBUTES' not in engine + mini + ui
 assert 'IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS' in engine
+assert 'IOCTL_STORAGE_GET_DEVICE_NUMBER' in engine
+assert 'bool IsAllowedStorageBus(STORAGE_BUS_TYPE bus)' in engine
+assert 'return bus == BusTypeUsb;' in engine
+assert 'SameDiskIdentity(const Disk& expected, HANDLE physical)' in engine
+assert 'std::memchr(start, 0, returned - serialOffset)' in engine
+assert 'actual.mbrSignature == expected.identity.mbrSignature' in engine
+assert 'IsEqualGUID(actual.gptDiskId, expected.identity.gptDiskId)' in engine
+assert 'WriteAttributesChecked(const Disk& disk, HANDLE physical,' in engine
+assert 'SameDiskIdentity(disk, physical)' in engine
+assert 'FindWindowsDisks();' in engine
+assert 'RefreshMountedState(const Disk& expected, HANDLE physical,' in engine
+assert 'g_windowsDisks.empty() || g_windowsDisks.count(disk.number)' in engine
+assert 'ReadBlockIdentity(const std::string& device, BlockIdentity& identity)' in linux_core
+assert 'IsUsbPath(canonical)' in linux_core
+assert 'SameBlockIdentity(disk.identity, liveDisk)' in linux_core
+assert 'SameBlockIdentity(volume.identity, actual)' in linux_core
+assert 'MatchesMount(volume, mount)' in linux_core
+assert 'backend.ValidateTarget(disk, volume)' in linux_core
+assert 'backend.ValidateTarget(disk, it->volume)' in linux_core
+assert 'virtual void ValidateTarget' in linux_header
+assert 'sata.usbPath.clear()' in linux_tests
+assert 'nvme.sysfsPath' in linux_tests
+assert 'replaceAfterRemount = true' in linux_tests
 assert 'g_windowsDisks.count' in engine
 assert 'PBM_SETPOS' in ui and 'LVS_EX_CHECKBOXES' in ui
 assert 'GetNamedPipeClientProcessId' in mini

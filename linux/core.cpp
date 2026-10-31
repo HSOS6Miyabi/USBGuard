@@ -51,6 +51,48 @@ bool IsUsbPath(const std::string& path) {
     const size_t n = offset + 4;
     return n < path.size() && std::isdigit(static_cast<unsigned char>(path[n]));
 }
+bool ReadBlockIdentity(const std::string& device, BlockIdentity& identity) {
+    if (!IsSafeDeviceArgument(device)) return false;
+    const std::string name = device.substr(5);
+    const std::string sys = "/sys/class/block/" + name;
+    if (!fs::exists(sys)) return false;
+    struct stat st{};
+    if (stat(device.c_str(), &st) != 0 || !S_ISBLK(st.st_mode)) return false;
+    if (FirstLine(sys + "/dev") != std::to_string(major(st.st_rdev)) + ":" +
+                                   std::to_string(minor(st.st_rdev))) return false;
+    const std::string canonical = Canonical(sys);
+    if (canonical.empty() || !IsUsbPath(canonical)) return false;
+    BlockIdentity result{};
+    result.major = static_cast<unsigned>(major(st.st_rdev));
+    result.minor = static_cast<unsigned>(minor(st.st_rdev));
+    result.sysfsPath = canonical;
+    for (fs::path parent(canonical); !parent.empty() &&
+         parent != parent.root_path(); parent = parent.parent_path()) {
+        if (!fs::exists(parent / "idVendor") || !fs::exists(parent / "idProduct"))
+            continue;
+        result.usbPath = parent.string();
+        result.usbVendor = FirstLine((parent / "idVendor").string());
+        result.usbProduct = FirstLine((parent / "idProduct").string());
+        result.usbSerial = FirstLine((parent / "serial").string());
+        break;
+    }
+    if (result.usbPath.empty() || result.usbVendor.empty() ||
+        result.usbProduct.empty()) return false;
+    identity = std::move(result);
+    return true;
+}
+bool IsCriticalMount(const std::string& mount) {
+    return mount == "/" || mount == "/boot" || mount == "/boot/efi" ||
+           mount == "/usr" || mount == "/var" || mount == "/home" ||
+           mount == "/run";
+}
+bool MatchesMount(const Volume& volume, const MountEntry& mount) {
+    if (mount.mountpoint != volume.mountpoint ||
+        mount.major != volume.identity.major || mount.minor != volume.identity.minor ||
+        IsCriticalMount(mount.mountpoint) || mount.bindMount) return false;
+    const std::string source = Canonical(mount.source);
+    return !source.empty() && source == Canonical(volume.device);
+}
 std::vector<MountEntry> LiveMounts() {
     return ParseMountInfo(ReadText("/proc/self/mountinfo"));
 }
@@ -68,6 +110,16 @@ void Report(const Progress& progress, int done, int total, const std::string& te
 }
 } // namespace
 
+bool SameBlockIdentity(const BlockIdentity& expected, const BlockIdentity& current) {
+    return !expected.sysfsPath.empty() && !expected.usbPath.empty() &&
+           !expected.usbVendor.empty() && !expected.usbProduct.empty() &&
+           expected.major == current.major && expected.minor == current.minor &&
+           expected.sysfsPath == current.sysfsPath &&
+           expected.usbPath == current.usbPath &&
+           expected.usbVendor == current.usbVendor &&
+           expected.usbProduct == current.usbProduct &&
+           expected.usbSerial == current.usbSerial;
+}
 std::string DecodeMountPath(const std::string& encoded) {
     std::string out;
     for (size_t i = 0; i < encoded.size(); ++i) {
@@ -150,15 +202,9 @@ bool IsSafeDeviceArgument(const std::string& device) {
 }
 bool IsUsbDisk(const std::string& path) {
     if (!IsSafeDeviceArgument(path)) return false;
-    const std::string name = path.substr(5);
-    const std::string sys = "/sys/class/block/" + name;
-    if (!fs::exists(sys) || fs::exists(sys + "/partition")) return false;
-    struct stat st{};
-    if (stat(path.c_str(),&st) != 0 || !S_ISBLK(st.st_mode)) return false;
-    const std::string sysDev = FirstLine(sys + "/dev");
-    if (sysDev != std::to_string(major(st.st_rdev)) + ":" +
-                  std::to_string(minor(st.st_rdev))) return false;
-    return IsUsbPath(Canonical(sys + "/device"));
+    if (fs::exists("/sys/class/block/" + path.substr(5) + "/partition")) return false;
+    BlockIdentity identity{};
+    return ReadBlockIdentity(path, identity);
 }
 std::vector<Disk> Discover() {
     const auto mounts = LiveMounts();
@@ -169,6 +215,7 @@ std::vector<Disk> Discover() {
         if (!IsUsbDisk(device)) continue;
         Disk disk;
         disk.device = device;
+        if (!ReadBlockIdentity(device, disk.identity)) continue;
         disk.model = FirstLine("/sys/class/block/" + name + "/device/model");
         if (disk.model.empty()) disk.model = name;
         // USB drive's own filesystem and any mounted partitions.
@@ -188,21 +235,26 @@ std::vector<Disk> Discover() {
                 const std::string source = Canonical(mounted.source);
                 // Detect false matches such as overlay/bind mounts of other sources.
                 if (!source.empty() && source != Canonical(childDevice)) continue;
+                if (mounted.bindMount || IsCriticalMount(mounted.mountpoint)) continue;
                 Volume volume{childDevice,mounted.mountpoint,mounted.filesystem,mounted.readonly,false};
+                if (!ReadBlockIdentity(childDevice, volume.identity) ||
+                    !MatchesMount(volume, mounted)) continue;
                 try { volume.blockReadOnly = KernelBackend().BlockReadOnly(childDevice); }
                 catch (...) { volume.blockReadOnly = false; }
                 disk.volumes.push_back(std::move(volume));
             }
         }
-        // A Linux installation can boot from an actual USB disk. Never
-        // change protection on a disk that holds live system filesystems.
-        const auto critical = [](const std::string& mount) {
-            return mount == "/" || mount == "/boot" || mount == "/boot/efi" ||
-                   mount == "/usr" || mount == "/var" || mount == "/home" ||
-                   mount == "/run";
-        };
-        const bool systemMedia = std::any_of(disk.volumes.begin(),disk.volumes.end(),
-            [&](const Volume& volume){return critical(volume.mountpoint);});
+        // Exclude a USB system disk even if the data partition is separate.
+        bool systemMedia = false;
+        for (const auto& mounted : mounts) {
+            if (!IsCriticalMount(mounted.mountpoint)) continue;
+            const std::string source = Canonical(mounted.source);
+            if (source.empty()) continue;
+            if (DiskFromBlockName(fs::path(source).filename().string()) == name) {
+                systemMedia = true;
+                break;
+            }
+        }
         if (!disk.volumes.empty() && !systemMedia) disks.push_back(std::move(disk));
     }
     std::sort(disks.begin(),disks.end(),[](const auto& a,const auto& b){return a.device<b.device;});
@@ -230,7 +282,35 @@ std::string SourceDisk() {
     const std::string device = "/dev/" + parent;
     return IsUsbDisk(device) ? device : "";
 }
+void KernelBackend::ValidateTarget(const Disk& disk, const Volume& volume) {
+    BlockIdentity liveDisk{}, liveVolume{};
+    if (!IsUsbDisk(disk.device) ||
+        !ReadBlockIdentity(disk.device, liveDisk) ||
+        !ReadBlockIdentity(volume.device, liveVolume) ||
+        !SameBlockIdentity(disk.identity, liveDisk) ||
+        !SameBlockIdentity(volume.identity, liveVolume) ||
+        DiskFromBlockName(fs::path(volume.device).filename().string()) !=
+            fs::path(disk.device).filename().string())
+        throw std::runtime_error("USB 磁盘或分区身份已变化，已停止操作");
+    const auto mounts = LiveMounts();
+    if (!std::any_of(mounts.begin(), mounts.end(),
+        [&](const MountEntry& mount) { return MatchesMount(volume, mount); }))
+        throw std::runtime_error("挂载点已变化，已拒绝操作：" + volume.mountpoint);
+    for (const auto& mount : mounts) {
+        if (!IsCriticalMount(mount.mountpoint)) continue;
+        const std::string source = Canonical(mount.source);
+        if (!source.empty() &&
+            DiskFromBlockName(fs::path(source).filename().string()) ==
+                fs::path(disk.device).filename().string())
+            throw std::runtime_error("目标 USB 磁盘包含系统文件系统，已拒绝操作");
+    }
+}
 void KernelBackend::Remount(const Volume& volume, bool readonly) {
+    const auto mounts = LiveMounts();
+    if (!std::any_of(mounts.begin(), mounts.end(),
+        [&](const MountEntry& mount) { return MatchesMount(volume, mount); }))
+        throw std::runtime_error("挂载点身份发生变化：" + volume.mountpoint);
+
     struct statvfs info{};
     if (statvfs(volume.mountpoint.c_str(),&info) != 0)
         throw std::runtime_error(Error("读取挂载状态失败"));
@@ -245,24 +325,33 @@ void KernelBackend::Remount(const Volume& volume, bool readonly) {
     if (mount(nullptr,volume.mountpoint.c_str(),nullptr,flags,nullptr) != 0)
         throw std::runtime_error(Error("重新挂载失败 " + volume.mountpoint));
 }
-void KernelBackend::SetBlockReadOnly(const std::string& device, bool readonly) {
-    const int fd = open(device.c_str(),O_RDONLY|O_CLOEXEC|O_NONBLOCK);
-    if (fd < 0) throw std::runtime_error(Error("无法打开 " + device));
+void KernelBackend::SetBlockReadOnly(const Volume& volume, bool readonly) {
+    const int fd = open(volume.device.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+    if (fd < 0) throw std::runtime_error(Error("无法打开 " + volume.device));
+    struct stat st{};
+    BlockIdentity actual{};
+    const bool safe = fstat(fd, &st) == 0 && S_ISBLK(st.st_mode) &&
+        major(st.st_rdev) == volume.identity.major &&
+        minor(st.st_rdev) == volume.identity.minor &&
+        ReadBlockIdentity(volume.device, actual) &&
+        SameBlockIdentity(volume.identity, actual);
+    if (!safe) {
+        close(fd);
+        throw std::runtime_error("块设备身份发生变化，已拒绝修改：" + volume.device);
+    }
     int ro = readonly ? 1 : 0;
-    const int result = ioctl(fd,BLKROSET,&ro);
+    const int result = ioctl(fd, BLKROSET, &ro);
     const int error = errno;
     close(fd);
-    if (result != 0) {errno=error;throw std::runtime_error(Error("设置块设备只读属性失败 " + device));}
+    if (result != 0) {
+        errno = error;
+        throw std::runtime_error(Error("设置块设备只读属性失败 " + volume.device));
+    }
 }
 bool KernelBackend::MountedReadOnly(const Volume& volume) {
     const auto entries = LiveMounts();
     for (const auto& entry : entries)
-        if (entry.mountpoint == volume.mountpoint && entry.source == volume.device)
-            return entry.readonly;
-    // symlink sources (e.g. /dev/disk/by-uuid) are common.
-    for (const auto& entry : entries)
-        if (entry.mountpoint == volume.mountpoint)
-            return entry.readonly;
+        if (MatchesMount(volume, entry)) return entry.readonly;
     throw std::runtime_error("挂载点已经消失：" + volume.mountpoint);
 }
 bool KernelBackend::BlockReadOnly(const std::string& device) {
@@ -286,9 +375,15 @@ bool KernelBackend::BlockReadOnly(const std::string& device) {
 }
 Result Apply(Disk& disk, Action action, Backend& backend, const Progress& progress) {
     if (disk.volumes.empty()) return {false,false,"没有已挂载的目标文件系统"};
+    try {
+        for (const auto& volume : disk.volumes) backend.ValidateTarget(disk, volume);
+    } catch (const std::exception& e) {
+        return {false,false,e.what()};
+    }
     if (action == Action::Status) {
         bool all = true;
         for (auto& volume : disk.volumes) {
+            backend.ValidateTarget(disk, volume);
             volume.blockReadOnly = backend.BlockReadOnly(volume.device);
             volume.mountReadOnly = backend.MountedReadOnly(volume);
             all = all && volume.blockReadOnly && volume.mountReadOnly;
@@ -308,15 +403,19 @@ Result Apply(Disk& disk, Action action, Backend& backend, const Progress& progre
     int done=0;
     try {
         for (auto& volume : disk.volumes) {
+            backend.ValidateTarget(disk, volume);
             Report(progress,done,total,"正在准备卷 " + volume.mountpoint);
             if (desired) {
                 if (!backend.MountedReadOnly(volume)) backend.Remount(volume,true);
                 ++done; Report(progress,done,total,"文件系统已重新挂载为只读：" + volume.mountpoint);
-                if (!backend.BlockReadOnly(volume.device)) backend.SetBlockReadOnly(volume.device,true);
+                backend.ValidateTarget(disk, volume);
+                if (!backend.BlockReadOnly(volume.device)) backend.SetBlockReadOnly(volume,true);
                 ++done; Report(progress,done,total,"块设备只读属性已更新：" + volume.device);
             } else {
-                if (backend.BlockReadOnly(volume.device)) backend.SetBlockReadOnly(volume.device,false);
+                backend.ValidateTarget(disk, volume);
+                if (backend.BlockReadOnly(volume.device)) backend.SetBlockReadOnly(volume,false);
                 ++done; Report(progress,done,total,"块设备写入权限已更新：" + volume.device);
+                backend.ValidateTarget(disk, volume);
                 if (backend.MountedReadOnly(volume)) backend.Remount(volume,false);
                 ++done; Report(progress,done,total,"文件系统已重新挂载为可写：" + volume.mountpoint);
             }
@@ -333,10 +432,12 @@ Result Apply(Disk& disk, Action action, Backend& backend, const Progress& progre
         bool rolledBack=true;
         for(auto it=original.rbegin();it!=original.rend();++it) {
             try {
-                if(!it->block) backend.SetBlockReadOnly(it->volume.device,false);
+                backend.ValidateTarget(disk, it->volume);
+                if(!it->block) backend.SetBlockReadOnly(it->volume,false);
                 if(backend.MountedReadOnly(it->volume)!=it->mounted)
                     backend.Remount(it->volume,it->mounted);
-                if(it->block) backend.SetBlockReadOnly(it->volume.device,true);
+                backend.ValidateTarget(disk, it->volume);
+                if(it->block) backend.SetBlockReadOnly(it->volume,true);
             }catch(...){rolledBack=false;}
         }
         return {false,false,std::string(e.what())+

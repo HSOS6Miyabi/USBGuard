@@ -6,18 +6,31 @@
 
 namespace linuxguard {
 
+struct BlockIdentity {
+    unsigned major = 0;
+    unsigned minor = 0;
+    std::string sysfsPath;
+    std::string usbPath;
+    std::string usbVendor;
+    std::string usbProduct;
+    std::string usbSerial;
+};
+bool SameBlockIdentity(const BlockIdentity& expected, const BlockIdentity& current);
+
 struct Volume {
     std::string device;
     std::string mountpoint;
     std::string filesystem;
     bool mountReadOnly = false;
     bool blockReadOnly = false;
+    BlockIdentity identity;
 };
 
 struct Disk {
     std::string device;
     std::string model;
     std::vector<Volume> volumes;
+    BlockIdentity identity;
 };
 
 enum class Action { Protect, Unprotect, Toggle, Status };
@@ -43,7 +56,8 @@ class Backend {
 public:
     virtual ~Backend() = default;
     virtual void Remount(const Volume& volume, bool readonly) = 0;
-    virtual void SetBlockReadOnly(const std::string& device, bool readonly) = 0;
+    virtual void SetBlockReadOnly(const Volume& volume, bool readonly) = 0;
+    virtual void ValidateTarget(const Disk& disk, const Volume& volume) = 0;
     virtual bool MountedReadOnly(const Volume& volume) = 0;
     virtual bool BlockReadOnly(const std::string& device) = 0;
 };
@@ -63,7 +77,8 @@ bool IsSafeDeviceArgument(const std::string& path);
 class KernelBackend final : public Backend {
 public:
     void Remount(const Volume& volume, bool readonly) override;
-    void SetBlockReadOnly(const std::string& device, bool readonly) override;
+    void SetBlockReadOnly(const Volume& volume, bool readonly) override;
+    void ValidateTarget(const Disk& disk, const Volume& volume) override;
     bool MountedReadOnly(const Volume& volume) override;
     bool BlockReadOnly(const std::string& device) override;
 };

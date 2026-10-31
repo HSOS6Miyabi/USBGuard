@@ -116,6 +116,27 @@ int wmain(int argc, wchar_t** argv) {
         std::wcerr << L"Disposable VHD target missing or unsafe. Disk " << number << std::endl;
         return 4;
     }
+    // The production allowlist accepts USB (including UASP), not internal buses.
+    if (!usb::IsAllowedStorageBus(BusTypeUsb) ||
+        usb::IsAllowedStorageBus(static_cast<STORAGE_BUS_TYPE>(11)) ||
+        usb::IsAllowedStorageBus(static_cast<STORAGE_BUS_TYPE>(17))) {
+        std::wcerr << L"Storage bus safety policy rejected USB or accepted SATA/NVMe\n";
+        return 10;
+    }
+
+    // Simulate reconnecting a different disk under the same PhysicalDrive number.
+    // No write is permitted when its stable MBR/GPT identity has changed.
+    usb::Disk swapped = *target;
+    if (swapped.style == PARTITION_STYLE_MBR)
+        swapped.identity.mbrSignature ^= 0x01010101u;
+    else
+        swapped.identity.gptDiskId.Data1 ^= 0x01010101u;
+    std::wstring denied;
+    if (usb::ChangeDisk(swapped, policy::Action::Protect, denied)) {
+        std::wcerr << L"Changed physical disk identity was accepted\n";
+        return 11;
+    }
+
     bool foundExpectedRoot = false;
     bool foundSecondRoot = !multiple;
     for (auto& volume : target->volumes) {
