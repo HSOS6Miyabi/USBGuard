@@ -89,7 +89,7 @@ def inspect(path: Path, expected_machine: int) -> set[str]:
             if value & ordinal_flag:
                 continue
             name_offset = offset(value) + 2
-            end = data.find(b'\\0', name_offset, min(len(data), name_offset + 256))
+            end = data.find(b'\0', name_offset, min(len(data), name_offset + 256))
             assert end > name_offset, f'{path}: malformed imported function name'
             imported_functions.add(data[name_offset:end].decode('ascii'))
         else:
