@@ -34,12 +34,26 @@ try {
         throw "Refusing to initialize a VHD with preexisting partition table"
     }
     Initialize-Disk -Number $disk.Number -PartitionStyle $Style -ErrorAction Stop
-    $partition = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter -ErrorAction Stop
+    if ($Style -eq 'GPT') {
+        $partition = New-Partition -DiskNumber $disk.Number -Size 100MB -AssignDriveLetter -ErrorAction Stop
+        $second = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter -ErrorAction Stop
+    } else {
+        $partition = New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter -ErrorAction Stop
+        $second = $null
+    }
     if (!$partition.DriveLetter) { throw "VHD partition did not acquire a drive letter" }
     Format-Volume -Partition $partition -FileSystem NTFS -NewFileSystemLabel "USBGuardCI" -Confirm:$false -Force -ErrorAction Stop | Out-Null
     $drive = [string]$partition.DriveLetter
-    Write-Host "Testing $Style virtual disk $($disk.Number), drive $drive with $Executable"
-    & $Executable "$($disk.Number)" "$drive" "$Style"
+    if ($second) {
+        if (!$second.DriveLetter) { throw "Second VHD partition has no drive letter" }
+        Format-Volume -Partition $second -FileSystem NTFS -NewFileSystemLabel "USBGuardCI2" -Confirm:$false -Force -ErrorAction Stop | Out-Null
+        $secondDrive = [string]$second.DriveLetter
+        Write-Host "Testing GPT virtual disk $($disk.Number) with two volumes $drive and $secondDrive"
+        & $Executable "$($disk.Number)" "$drive" "$Style" "$secondDrive"
+    } else {
+        Write-Host "Testing MBR virtual disk $($disk.Number), drive $drive"
+        & $Executable "$($disk.Number)" "$drive" "$Style"
+    }
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
         throw "Integration test returned $exitCode for $Style"
