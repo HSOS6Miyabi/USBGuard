@@ -247,6 +247,8 @@ struct MiniState {
     bool succeeded = false;
     bool smokeTest = false;
     bool openedDirectory = false;
+    bool restoreExplorerPending = false;
+    ULONGLONG lastExplorerAttempt = 0;
     policy::Action requestedAction = policy::Action::Invalid;
     std::wstring executableDirectory;
     ULONGLONG finishTick = 0;
@@ -281,9 +283,41 @@ bool RestoreExplorerWindow(HWND owner) {
     const DWORD attributes = GetFileAttributesW(directory.c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
         return false;
-    const HINSTANCE opened = ShellExecuteW(owner, L"open", directory.c_str(),
-                                           nullptr, nullptr, SW_SHOWNORMAL);
-    return reinterpret_cast<INT_PTR>(opened) > 32;
+
+    // Launch Explorer itself with /n to request a fresh folder window.
+    // ShellExecute("open", directory) may hand the request to an existing
+    // Explorer instance whose window was closed during the volume dismount.
+    wchar_t windowsDirectory[MAX_PATH]{};
+    const UINT length = GetWindowsDirectoryW(windowsDirectory, MAX_PATH);
+    if (!length || length >= MAX_PATH) return false;
+    std::wstring explorer(windowsDirectory);
+    if (explorer.back() != L'\\') explorer += L'\\';
+    explorer += L"explorer.exe";
+    const std::wstring parameters = L"/n,\"" + directory + L"\"";
+    SHELLEXECUTEINFOW launch{};
+    launch.cbSize = sizeof(launch);
+    launch.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+    launch.hwnd = owner;
+    launch.lpVerb = L"open";
+    launch.lpFile = explorer.c_str();
+    launch.lpParameters = parameters.c_str();
+    launch.nShow = SW_SHOWNORMAL;
+    const bool started = ShellExecuteExW(&launch) != FALSE;
+    if (launch.hProcess) CloseHandle(launch.hProcess);
+    return started;
+}
+
+void TryRestoreExplorerWindow(HWND owner) {
+    if (!g_ui.restoreExplorerPending || g_ui.openedDirectory) return;
+    const ULONGLONG now = CompatTickCount();
+    // Retry only during the existing completion countdown. Windows can take
+    // some time to expose the same drive letter after FSCTL_DISMOUNT_VOLUME.
+    if (g_ui.lastExplorerAttempt && now - g_ui.lastExplorerAttempt < 400) return;
+    g_ui.lastExplorerAttempt = now;
+    if (RestoreExplorerWindow(owner)) {
+        g_ui.openedDirectory = true;
+        g_ui.restoreExplorerPending = false;
+    }
 }
 
 int Scale(int logical) {
@@ -480,16 +514,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g_ui.succeeded=result->exitCode == 0;
         g_ui.heading=g_ui.succeeded ? L"操作已完成" : L"操作未完成";
         g_ui.details=std::move(result->text);
-        // Reopen only after a successful protection change. Keep the explorer
-        // operation in this unelevated process, never in the administrator worker.
-        if (g_ui.succeeded && !g_ui.smokeTest &&
-            g_ui.requestedAction != policy::Action::Status &&
-            !g_ui.openedDirectory) {
-            g_ui.openedDirectory = true;
-            if (!RestoreExplorerWindow(window))
-                g_ui.details += L"\n无法自动重新打开程序目录，请在资源管理器中手动打开。";
-        }
         g_ui.finishTick=CompatTickCount();
+        // Keep Explorer launching in the unelevated UI process. A newly
+        // mounted volume may not be available at the instant the worker exits.
+        g_ui.restoreExplorerPending = g_ui.succeeded && !g_ui.smokeTest &&
+            g_ui.requestedAction != policy::Action::Status;
+        if (g_ui.restoreExplorerPending) TryRestoreExplorerWindow(window);
         KillTimer(window,kAnimationTimer);
         SetTimer(window,kCloseTimer,100,nullptr);
         SetWindowPos(window,HWND_TOPMOST,0,0,0,0,
@@ -503,8 +533,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 g_ui.animation+=static_cast<unsigned>(Scale(8));
             InvalidateRect(window,nullptr,FALSE);
         } else if (wParam == kCloseTimer) {
-            if (CompatTickCount()-g_ui.finishTick >=
-                (g_ui.smokeTest ? 500u : kFinishDurationMs)) {
+            const ULONGLONG elapsed = CompatTickCount() - g_ui.finishTick;
+            if (g_ui.restoreExplorerPending && elapsed < 3200) {
+                TryRestoreExplorerWindow(window);
+            } else if (g_ui.restoreExplorerPending) {
+                g_ui.restoreExplorerPending = false;
+                g_ui.details += L"\n未能自动打开程序目录，请手动在资源管理器中打开。";
+            }
+            if (elapsed >= (g_ui.smokeTest ? 500u : kFinishDurationMs)) {
                 KillTimer(window,kCloseTimer);
                 DestroyWindow(window);
             } else InvalidateRect(window,nullptr,FALSE);
