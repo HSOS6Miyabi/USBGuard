@@ -136,6 +136,26 @@ def inspect(path: Path, expected_machine: int) -> set[str]:
         return entries
 
     types = resource_entries(0)
+    manifest_types = [value for key, value in types if key == 24]
+    assert len(manifest_types) == 1 and manifest_types[0] & 0x80000000, (
+        f'{path}: missing RT_MANIFEST resource'
+    )
+    manifest_ids = resource_entries(manifest_types[0] & 0x7fffffff)
+    manifest_entries = [value for key, value in manifest_ids if key == 1]
+    assert len(manifest_entries) == 1 and manifest_entries[0] & 0x80000000, (
+        f'{path}: missing application manifest ID 1'
+    )
+    manifest_languages = resource_entries(manifest_entries[0] & 0x7fffffff)
+    assert manifest_languages and not (manifest_languages[0][1] & 0x80000000)
+    manifest_location = offset(resource_rva + manifest_languages[0][1])
+    manifest_rva, manifest_length = struct.unpack_from('<II', data, manifest_location)
+    manifest_data = data[offset(manifest_rva):offset(manifest_rva)+manifest_length]
+    assert b'Microsoft.Windows.Common-Controls' in manifest_data, (
+        f'{path}: Common Controls version 6 is not enabled'
+    )
+    assert b'6.0.0.0' in manifest_data, (
+        f'{path}: incorrect Common Controls visual styles version'
+    )
     version_types = [value for key, value in types if key == 16]
     assert len(version_types) == 1 and version_types[0] & 0x80000000, (
         f'{path}: missing RT_VERSION resource'

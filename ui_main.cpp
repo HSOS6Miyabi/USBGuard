@@ -1,5 +1,6 @@
 #include "engine.hpp"
 #include "command.hpp"
+#include "dialog.hpp"
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
@@ -99,13 +100,17 @@ void DoAction(policy::Action action) {
     if (!disk || busy) return;
     if (disk->style == PARTITION_STYLE_MBR) {
         for (const auto& v : disk->volumes) if (!v.selected) {
-            MessageBoxW(window, L"MBR 的整盘只读属性会影响所有分区，请勾选所有列出的卷。",
-                        L"无法进行设置", MB_OK | MB_ICONWARNING); return;
+            ui_dialog::Show(window, L"无法进行设置", L"请先选择磁盘的所有分区",
+                L"MBR 的整盘只读属性会影响所有分区，请勾选列表中的所有卷。",
+                ui_dialog::Severity::Warning);
+            return;
         }
     }
-    std::wstring question = L"确认要操作以下 USB 磁盘吗？\n\n" + usb::DiskLabel(*disk) +
-          L"\n\n此操作将强制卸载目标卷并刷新文件系统。请先保存所有文件并关闭占用该 U 盘的程序，未保存的数据可能丢失。";
-    if (MessageBoxW(window, question.c_str(), L"确认目标磁盘", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) return;
+    const std::wstring question = usb::DiskLabel(*disk) +
+        L"\n\n此操作将强制卸载目标卷并刷新文件系统。请先保存所有文件并关闭占用该 U 盘的程序，未保存的数据可能丢失。";
+    if (ui_dialog::Show(window, L"确认目标磁盘", L"确认修改此 USB 磁盘的写保护状态？",
+                        question, ui_dialog::Severity::Warning, true) != IDYES)
+        return;
     const DWORD number = disk->number;
     SetBusy(true);
     Status(L"正在读取并更新持久只读属性……");
@@ -121,8 +126,9 @@ void DoAction(policy::Action action) {
     SendMessageW(progress, PBM_SETPOS, ok ? 100 : 0, 0);
     SetBusy(false);
     Status(report);
-    MessageBoxW(window, report.c_str(), ok ? L"操作已完成" : L"操作失败",
-                MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONERROR));
+    ui_dialog::Show(window, ok ? L"操作已完成" : L"操作失败",
+        ok ? L"磁盘写保护设置已完成" : L"磁盘写保护设置失败",
+        report, ok ? ui_dialog::Severity::Information : ui_dialog::Severity::Error);
     Refresh(number);
     Status(report);
     SendMessageW(progress, PBM_SETPOS, ok ? 100 : 0, 0);

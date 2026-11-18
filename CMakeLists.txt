@@ -34,7 +34,7 @@ if(WIN32)
                    "${ICON_OUTPUT_DIR}/mini.version.rc" @ONLY)
 
 set(COMMON_SOURCES engine.cpp engine.hpp command.cpp command.hpp policy.hpp)
-add_executable(USBGuardUI WIN32 ui_main.cpp ${COMMON_SOURCES}
+add_executable(USBGuardUI WIN32 ui_main.cpp dialog.cpp dialog.hpp ${COMMON_SOURCES}
     "${ICON_OUTPUT_DIR}/ui.generated.rc" "${ICON_OUTPUT_DIR}/ui.version.rc")
 add_executable(USBGuardMini WIN32 mini_main.cpp ${COMMON_SOURCES}
     "${ICON_OUTPUT_DIR}/mini.generated.rc" "${ICON_OUTPUT_DIR}/mini.version.rc")

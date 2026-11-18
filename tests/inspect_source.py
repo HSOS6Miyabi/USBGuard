@@ -9,6 +9,7 @@ root = Path(__file__).resolve().parents[1]
 engine = (root / 'engine.cpp').read_text(encoding='utf-8')
 mini = (root / 'mini_main.cpp').read_text(encoding='utf-8')
 ui = (root / 'ui_main.cpp').read_text(encoding='utf-8')
+dialog = (root / 'dialog.cpp').read_text(encoding='utf-8')
 cmake = (root / 'CMakeLists.txt').read_text(encoding='utf-8')
 linux_core = (root / 'linux' / 'core.cpp').read_text(encoding='utf-8')
 linux_header = (root / 'linux' / 'core.hpp').read_text(encoding='utf-8')
@@ -44,6 +45,10 @@ assert 'nvme.sysfsPath' in linux_tests
 assert 'replaceAfterRemount = true' in linux_tests
 assert 'g_windowsDisks.count' in engine
 assert 'PBM_SETPOS' in ui and 'LVS_EX_CHECKBOXES' in ui
+assert 'MessageBox' not in ui + mini + dialog + engine
+assert 'TaskDialogIndirect' in dialog and 'DialogBoxIndirectParamW' in dialog
+assert ui.count('ui_dialog::Show(') == 3
+assert 'ui_dialog::Severity::Warning, true' in ui
 assert 'GetNamedPipeClientProcessId' in mini
 assert 'ShellExecuteExW' in mini
 assert 'L"runas"' in mini
@@ -121,6 +126,11 @@ for name, level in [('app.manifest', 'requireAdministrator'), ('mini.manifest', 
     parsed = ET.parse(root / name)
     actual = [e.attrib['level'] for e in parsed.iter() if e.tag.endswith('requestedExecutionLevel')]
     assert actual == [level], (name, actual)
+    common_controls = [e for e in parsed.iter()
+                       if e.tag.endswith('assemblyIdentity') and
+                       e.attrib.get('name') == 'Microsoft.Windows.Common-Controls']
+    assert len(common_controls) == 1, (name, common_controls)
+    assert common_controls[0].attrib.get('version') == '6.0.0.0', name
 
 with tempfile.TemporaryDirectory() as temp_dir:
     generated_icon = Path(temp_dir) / "usb-guard.ico"
