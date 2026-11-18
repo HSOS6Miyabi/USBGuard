@@ -8,6 +8,8 @@ namespace {
 
 // Use the documented TaskDialogIndirect ABI so the Windows XP toolset can
 // compile this file without exposing Vista-only SDK declarations.
+// commctrl.h defines these structures with one-byte packing.
+#pragma pack(push, 1)
 struct TaskDialogButtonCompat {
     int id;
     const wchar_t* text;
@@ -39,6 +41,7 @@ struct TaskDialogConfigCompat {
     LONG_PTR callbackData;
     UINT width;
 };
+#pragma pack(pop)
 
 #if _WIN32_WINNT >= 0x0600
 static_assert(sizeof(TaskDialogConfigCompat) == sizeof(TASKDIALOGCONFIG),
